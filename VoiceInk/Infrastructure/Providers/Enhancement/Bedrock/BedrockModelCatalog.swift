@@ -17,6 +17,9 @@ struct BedrockModelInfo: Codable, Sendable, Equatable {
     /// `converse.reasoningSupported.embedded`: whether the model writes its reasoning into the
     /// text itself rather than a separate content block. `nil` when not listed.
     let embeddedReasoning: Bool?
+    /// `converse.maxTokensDefault` and `maxTokensMaximum`: the default and largest output limits.
+    let maxTokensDefault: Int?
+    let maxTokensMaximum: Int?
 
     /// For display, such as "Anthropic · Claude Sonnet 5.5".
     var displayName: String {
@@ -89,6 +92,7 @@ enum BedrockModelCatalog {
                 (model.outputModalities ?? []).contains("TEXT"),
                 // Enhancement always sends a system prompt.
                 let converse = model.converse, converse.systemRoleSupported == true,
+                !excludedModelIDs.contains(model.modelId),
                 let invocationID = invocationID(for: model, profiles: activeProfiles)
             else {
                 return nil
@@ -100,11 +104,40 @@ enum BedrockModelCatalog {
                 modelName: model.modelName ?? model.modelId,
                 releasedAt: model.modelLifecycle?.startOfLifeTime.flatMap(parseDate),
                 additionalRequestFieldsSchema: converse.additionalRequestFieldsSchema,
-                embeddedReasoning: converse.reasoningSupported?.embedded
+                embeddedReasoning: converse.reasoningSupported?.embedded,
+                maxTokensDefault: converse.maxTokensDefault,
+                maxTokensMaximum: converse.maxTokensMaximum
             )
         }
         return ordered(uniqued(models))
     }
+
+    /// Models the filter above lets through that failed VoiceInk's Default enhancement request
+    /// in live tests on 2026-11-18 (us-east-2, 3 to 7 runs each). Nothing in the catalog marks
+    /// them, so they're listed here. They still work as custom model IDs.
+    static let excludedModelIDs: Set<String> = [
+        // Start with a "Here's the cleaned transcript:" style preamble, which would be pasted.
+        "amazon.nova-pro-v1:0",
+        "minimax.minimax-m2",
+        "minimax.minimax-m2.1",
+        "mistral.devstral-2-123b",
+        "mistral.magistral-small-2509",
+        "mistral.ministral-3-3b-instruct",
+        "mistral.ministral-3-8b-instruct",
+        "mistral.ministral-3-14b-instruct",
+        "mistral.mistral-large-3-675b-instruct",
+        "mistral.voxtral-mini-3b-2507",
+        "nvidia.nemotron-nano-12b-v2",
+        "qwen.qwen3-32b-v1:0",
+        // Writes its reasoning into the answer text.
+        "nvidia.nemotron-nano-9b-v2",
+        // Ignores the transcript and answers from the prompt's example instead.
+        "moonshotai.kimi-k3",
+        // Rejects any request with a system prompt: "Conversation roles must alternate".
+        "writer.palmyra-vision-7b",
+        // Gated: "not available for this account", with access through AWS Sales.
+        "zai.glm-5.3",
+    ]
 
     /// On-demand models are called by their base ID. Models that only run through an
     /// inference profile use a system-defined profile in this Region that routes to them,
@@ -262,6 +295,8 @@ enum BedrockModelCatalog {
             let systemRoleSupported: Bool?
             let additionalRequestFieldsSchema: String?
             let reasoningSupported: ReasoningSupport?
+            let maxTokensDefault: Int?
+            let maxTokensMaximum: Int?
         }
 
         let modelId: String
