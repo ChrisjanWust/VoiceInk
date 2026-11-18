@@ -21,6 +21,16 @@ extension AIService {
             for: provider
         )
         let reasoningLevel = EnhancementReasoningSettings.savedLevel(for: provider, model: resolvedModel)
+        let requestTimeout = ReasoningConfig.requestTimeout(
+            timeout,
+            retryOnTimeout: retryOnTimeout,
+            level: ReasoningConfig.effectiveLevel(
+                reasoningLevel,
+                for: provider,
+                modelName: resolvedModel,
+                modelInfo: reasoningModelInfo(for: provider, model: resolvedModel)
+            )
+        )
 
         let result: String
         var openRouterCompletion: OpenRouterCompletion? = nil
@@ -33,8 +43,8 @@ extension AIService {
                 systemPrompt: systemPrompt,
                 thinkingLevel: ReasoningConfig.geminiThinkingLevel(for: resolvedModel, level: reasoningLevel),
                 store: false,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
         case .anthropic:
             result = try await AnthropicLLMClient.chatCompletion(
@@ -42,8 +52,8 @@ extension AIService {
                 model: resolvedModel,
                 messages: messages,
                 systemPrompt: systemPrompt,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
         case .openRouter:
             let policy = OpenRouterRequestPolicy.lowLatency(
@@ -62,8 +72,8 @@ extension AIService {
                 includeRouterMetadata: true,
                 appReferer: URL(string: "https://tryvoiceink.com"),
                 appTitle: "VoiceInk",
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
             guard !OpenRouterRequestPolicy.outputWasTruncated(finishReason: completion.finishReason) else {
                 throw EnhancementError.outputTruncated
@@ -94,8 +104,8 @@ extension AIService {
                     modelName: resolvedModel,
                     level: reasoningLevel
                 ),
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
         case .voiceInkRefine:
             throw EnhancementError.customError(
@@ -111,8 +121,8 @@ extension AIService {
                     modelName: resolvedModel,
                     modelInfo: reasoningModelInfo(for: .ollama, model: resolvedModel)
                 ),
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
         case .localCLI:
             result = try await enhanceWithLocalCLI(
@@ -142,8 +152,8 @@ extension AIService {
                 temperature: 0.3,
                 reasoningEffort: reasoningEffort,
                 extraBody: extraBody,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
         }
 

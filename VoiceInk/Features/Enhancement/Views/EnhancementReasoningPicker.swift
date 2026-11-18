@@ -45,6 +45,24 @@ struct EnhancementReasoningPicker: View {
         return String(format: String(localized: "Default (%@)"), defaultLevel.displayName)
     }
 
+    /// How long a request at the selected level may take, for levels slower than Default.
+    private var slowLevelCaption: String? {
+        guard let level = selection.wrappedValue, ReasoningConfig.timeoutFloor(for: level) != nil else {
+            return nil
+        }
+        let timeout = ReasoningConfig.requestTimeout(
+            EnhancementRequestSettings.timeout,
+            retryOnTimeout: EnhancementRequestSettings.retryOnTimeout,
+            level: level
+        )
+        // A timeout retry makes up to three attempts.
+        let seconds = Int(timeout.seconds) * (timeout.retryOnTimeout ? 3 : 1)
+        return String(
+            format: String(localized: "Higher reasoning is slower. Enhancement may take up to %d seconds."),
+            seconds
+        )
+    }
+
     var body: some View {
         if !modelName.isEmpty, !levels.isEmpty {
             Picker(selection: selection) {
@@ -59,6 +77,13 @@ struct EnhancementReasoningPicker: View {
                         "How much the model thinks before it answers. Higher levels can help with complex prompts but are slower and cost more. Default keeps VoiceInk's low-latency setting. This applies to this model wherever it's used."
                     )
                 }
+            }
+
+            if let slowLevelCaption {
+                Text(slowLevelCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

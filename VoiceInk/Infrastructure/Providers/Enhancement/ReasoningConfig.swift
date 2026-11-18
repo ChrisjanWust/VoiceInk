@@ -219,6 +219,23 @@ struct ReasoningConfig {
         modelName: String,
         modelInfo: ReasoningModelInfo = ReasoningModelInfo()
     ) -> [ReasoningLevel] {
+        let tooSlow = tooSlowLevels[provider]?[modelName] ?? []
+        return providerLevels(for: provider, modelName: modelName, modelInfo: modelInfo)
+            .filter { !tooSlow.contains($0) }
+    }
+
+    // Levels too slow for dictation in live measurements on 2026-11-17 (median above
+    // ~45 s or max above ~120 s), so they aren't offered for these models.
+    static let tooSlowLevels: [AIProvider: [String: Set<ReasoningLevel>]] = [
+        .openAI: ["gpt-5.4": [.xhigh], "gpt-5.4-mini": [.xhigh]],
+        .gemini: ["gemini-4-carbon": [.high], "gemini-4-argon": [.high]],
+    ]
+
+    private static func providerLevels(
+        for provider: AIProvider,
+        modelName: String,
+        modelInfo: ReasoningModelInfo
+    ) -> [ReasoningLevel] {
         switch provider {
         case .openAI:
             return openAILevels(for: modelName)
@@ -361,6 +378,44 @@ struct ReasoningConfig {
         }
 
         return parameters.isEmpty ? nil : parameters
+    }
+
+    // MARK: - Request timeout
+
+    struct RequestTimeout: Equatable {
+        let seconds: TimeInterval
+        let retryOnTimeout: Bool
+    }
+
+    /// The minimum request timeout for a picked level, set well above the slowest
+    /// responses measured live on 2026-11-17 (VoiceInk's Default prompt and a
+    /// 121-word dictation). `nil` keeps the configured timeout, for levels that
+    /// answer as fast as Default.
+    static func timeoutFloor(for level: ReasoningLevel) -> TimeInterval? {
+        switch level {
+        case .off, .minimal, .low:
+            return nil
+        case .medium:
+            return 90
+        case .high, .xhigh, .max, .enabled:
+            return 120
+        }
+    }
+
+    /// The timeout for a request at this level. A larger configured timeout wins, and
+    /// Default (`nil`) keeps the configured timeout and retry setting unchanged.
+    static func requestTimeout(
+        _ timeout: TimeInterval,
+        retryOnTimeout: Bool,
+        level: ReasoningLevel?
+    ) -> RequestTimeout {
+        guard let level, let floor = timeoutFloor(for: level), floor > timeout else {
+            return RequestTimeout(seconds: timeout, retryOnTimeout: retryOnTimeout)
+        }
+        // LLMkit applies the timeout to each of up to three attempts, so a retry would
+        // triple the wait. A reasoning request that outlasts the floor is unlikely to
+        // finish on a second try.
+        return RequestTimeout(seconds: floor, retryOnTimeout: false)
     }
 
     // MARK: - Ollama
