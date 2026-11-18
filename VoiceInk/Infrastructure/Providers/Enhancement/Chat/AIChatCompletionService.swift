@@ -16,7 +16,10 @@ extension AIService {
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> AIChatCompletionResult {
-        let resolvedModel = modelName?.isEmpty == false ? modelName! : selectedModel(for: provider)
+        let resolvedModel = CerebrasModelMigration.resolvedModel(
+            modelName?.isEmpty == false ? modelName! : selectedModel(for: provider),
+            for: provider
+        )
         let reasoningLevel = EnhancementReasoningSettings.savedLevel(for: provider, model: resolvedModel)
 
         let result: String
