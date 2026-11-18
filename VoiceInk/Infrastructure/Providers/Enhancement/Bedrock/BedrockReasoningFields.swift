@@ -188,13 +188,60 @@ enum BedrockReasoningFieldMap {
         let encoding: BedrockReasoningOptions.Encoding
     }
 
-    // Filled in from live tests; see the PR for the measurements.
-    static let nativeFamilies: [String: Family] = [:]
+    // Models whose catalog schema doesn't describe their reasoning field, with the native
+    // field each family takes. Every effort here returned clean text in live tests on
+    // 2026-11-18 (us-east-2, VoiceInk's Default prompt, 3 runs each); efforts that were
+    // rejected, changed nothing, leaked reasoning into the text or were too slow are left out.
+    static let nativeFamilies: [String: Family] = {
+        // `thinking.type: adaptive` with `output_config.effort`. Claude 4.6 rejects xhigh.
+        let adaptive: [String: [BedrockReasoningEffort]] = [
+            "anthropic.claude-sonnet-4-6": [.off, .low, .medium, .high, .max],
+            "anthropic.claude-opus-4-6-v1": [.off, .low, .medium, .high, .max],
+            "anthropic.claude-opus-4-7": [.off, .low, .medium, .high, .xhigh, .max],
+            "anthropic.claude-opus-4-8": [.off, .low, .medium, .high, .xhigh, .max],
+            // Rejects `thinking.type: disabled`.
+            "anthropic.claude-fable-5": [.low, .medium, .high, .xhigh, .max],
+            "anthropic.claude-sonnet-5": [.off, .low, .medium, .high, .xhigh, .max],
+            "anthropic.claude-opus-5": [.off, .low, .medium, .high, .xhigh, .max],
+        ]
+        // Reject adaptive thinking and take a thinking budget instead. They don't think by default.
+        let budgets: [BedrockReasoningEffort: Int] = [.low: 1_024, .medium: 4_096, .high: 16_384]
+        let budgetModels = ["anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-opus-4-5-20251101-v1:0"]
+        // gpt-oss reasons at OpenAI's default, medium, unless told otherwise.
+        let gptOSS = ["openai.gpt-oss-120b-1:0", "openai.gpt-oss-20b-1:0", "openai.gpt-oss-safeguard-120b", "openai.gpt-oss-safeguard-20b"]
+        // Only `high` turns reasoning on; `low` and `medium` answered exactly like Default.
+        let highOnly = ["deepseek.v3.2", "deepseek.v3-v1:0", "zai.glm-5", "zai.glm-4.7", "zai.glm-4.7-flash", "nvidia.nemotron-super-3-120b"]
+
+        var families: [String: Family] = [:]
+        for (model, efforts) in adaptive {
+            families[model] = Family(efforts: efforts, defaultEffort: nil, encoding: .anthropicAdaptive)
+        }
+        for model in budgetModels {
+            families[model] = Family(efforts: [.low, .medium, .high], defaultEffort: .off, encoding: .anthropicBudget(budgets))
+        }
+        // `reasoningConfig.type: enabled` with `maxReasoningEffort`. Off by default.
+        families["amazon.nova-2-lite-v1:0"] = Family(efforts: [.low, .medium], defaultEffort: .off, encoding: .novaEffort)
+        for model in gptOSS {
+            families[model] = Family(efforts: [.low, .medium, .high], defaultEffort: .medium, encoding: .reasoningEffort)
+        }
+        for model in highOnly {
+            families[model] = Family(efforts: [.high], defaultEffort: .off, encoding: .reasoningEffort)
+        }
+        // No working control: Gemma 3 and Voxtral Small don't reason; MiniMax M2.5 reasons the
+        // same with every field tried; Qwen3 `high` ran past 150 s and Qwen3 VL wrote its
+        // reasoning into the text; Kimi K2.5 `high` took a 66 s median; Nemotron Nano 3 leaked
+        // reasoning into the text at medium and added a preamble at high.
+        return families
+    }()
 
     // Efforts too slow for dictation in live measurements (median above ~45 s or max above
-    // ~120 s, the rule in `ReasoningConfig.tooSlowLevels`), keyed by foundation model ID.
+    // ~120 s, the rule in `ReasoningConfig.tooSlowLevels`), keyed by foundation model ID:
+    // Claude Opus 5.5 max (65 s median), Opus 4.8 max (54 s), Sonnet 5 max (114 s) and
+    // Nova 2 Lite high (114 s).
     static let tooSlowEfforts: [String: Set<BedrockReasoningEffort>] = [
-        "anthropic.claude-opus-5-5": [.max]
+        "anthropic.claude-opus-5-5": [.max],
+        "anthropic.claude-opus-4-8": [.max],
+        "anthropic.claude-sonnet-5": [.max],
     ]
 
     // MARK: - Schema enums
