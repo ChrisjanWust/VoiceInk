@@ -230,8 +230,8 @@ extension HostedModelProviders {
         "tencent/hy4-preview",
     ]
 
-    /// The gateway maps `reasoning_effort` onto each upstream provider's own control. 243 of the
-    /// 249 models on VoiceInk's filtered list were measured; the other 6 are costly pro and o1
+    /// The gateway maps `reasoning_effort` onto each upstream provider's own control. 240 of the
+    /// 246 models on VoiceInk's filtered list were measured; the other 6 are costly pro and o1
     /// models, which get Default only.
     static let vercelAIGatewayReasoning: [String: ModelReasoning] = [
         "alibaba/qwen-3-32b": ModelReasoning(defaultEffort: "none", levels: [.off]),
@@ -356,7 +356,6 @@ extension HostedModelProviders {
         "moonshotai/kimi-k3-fast": ModelReasoning(defaultEffort: "none", levels: [.off]),
         "moonshotai/kimi-k3.1-pro": ModelReasoning(defaultEffort: "none", levels: [.off]),
         "moonshotai/kimi-k3.1-pro-highspeed": ModelReasoning(defaultEffort: "low", levels: []),
-        "morph/morph-v3-large": ModelReasoning(defaultEffort: "none", levels: [.off]),
         "nvidia/nemotron-3-super-120b-a12b": ModelReasoning(defaultEffort: "none", levels: [.off]),
         "nvidia/nemotron-3-ultra-550b-a55b": ModelReasoning(defaultEffort: "none", levels: [.off]),
         "nvidia/nemotron-3.5-lightning": ModelReasoning(defaultEffort: "none", levels: [.off, .minimal, .low, .medium, .high, .xhigh, .max]),
@@ -418,7 +417,6 @@ extension HostedModelProviders {
         "openai/gpt-6.2-sol-fast": ModelReasoning(defaultEffort: "low", levels: []),
         "openai/gpt-oss-120b": ModelReasoning(defaultEffort: "low", levels: []),
         "openai/gpt-oss-20b": ModelReasoning(defaultEffort: "low", levels: []),
-        "openai/gpt-oss-safeguard-120b": ModelReasoning(defaultEffort: nil, levels: []),
         "openai/o3": ModelReasoning(defaultEffort: "low", levels: []),
         "openai/o3-fast": ModelReasoning(defaultEffort: "low", levels: []),
         "openai/o3-mini": ModelReasoning(defaultEffort: "low", levels: []),
