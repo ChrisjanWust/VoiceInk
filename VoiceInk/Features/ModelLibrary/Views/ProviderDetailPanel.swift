@@ -17,6 +17,7 @@ struct ProviderDetailPanel: View {
     @State private var verificationSucceeded = false
     @State private var isShowingRemoveAPIKeyConfirmation = false
     @State private var activeDescriptorID = ""
+    @State private var bedrockVerificationModel = ""
 
     private var isConfigured: Bool {
         APIKeyManager.shared.hasAPIKey(forProvider: descriptor.providerKey)
@@ -87,6 +88,22 @@ struct ProviderDetailPanel: View {
     private var apiKeySection: some View {
         ProviderConfigurationGroup(title: "Connection") {
             VStack(alignment: .leading, spacing: 8) {
+                if descriptor.aiProvider == .bedrock {
+                    VStack(alignment: .leading, spacing: 12) {
+                        BedrockRegionField(isDisabled: isVerifying)
+
+                        if !isConfigured {
+                            BedrockVerificationModelPicker(
+                                aiService: aiService,
+                                model: $bedrockVerificationModel,
+                                isDisabled: isVerifying
+                            )
+                        }
+                    }
+                    .padding(12)
+                    .background(ProviderSurface(cornerRadius: 8))
+                }
+
                 if isConfigured {
                     verifiedAPIKeyRow
                 } else {
@@ -481,6 +498,7 @@ struct ProviderDetailPanel: View {
 
     private func resetProviderState() {
         activeDescriptorID = descriptor.id
+        bedrockVerificationModel = aiService.selectedModel(for: .bedrock)
         verificationSucceeded = isConfigured
         apiKey = ""
         isVerifying = false
@@ -492,6 +510,10 @@ struct ProviderDetailPanel: View {
     }
 
     private func verificationModel(for provider: AIProvider) -> String {
+        if provider == .bedrock {
+            return bedrockVerificationModel
+        }
+
         let selectedModel = aiService.selectedModel(for: provider)
         let models = aiService.availableModels(for: provider)
 
@@ -533,6 +555,9 @@ struct ProviderDetailPanel: View {
 
                 if result.isValid {
                     APIKeyManager.shared.saveAPIKey(trimmedKey, forProvider: descriptor.providerKey)
+                    if descriptor.aiProvider == .bedrock {
+                        aiService.selectModel(bedrockVerificationModel, for: .bedrock)
+                    }
                     if let provider = descriptor.aiProvider, aiService.selectedProvider == provider {
                         aiService.apiKey = trimmedKey
                         aiService.isAPIKeyValid = true

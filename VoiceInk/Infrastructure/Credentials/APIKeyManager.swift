@@ -29,6 +29,7 @@ final class APIKeyManager {
         "openai": "openAIAPIKey",
         "anthropic": "anthropicAPIKey",
         "openrouter": "openRouterAPIKey",
+        "amazon bedrock": "bedrockAPIKey",
     ]
 
     private init() {}

@@ -257,6 +257,10 @@ struct ReasoningConfig {
             // Need LLMkit support: Anthropic `output_config.effort`, and Mistral's
             // chunked `content` that holds thinking.
             return []
+        case .bedrock:
+            // Converse sends no reasoning parameters, so each Bedrock model runs on its
+            // own default. Mapping levels needs per-model `additionalModelRequestFields`.
+            return []
         default:
             // Transcription-only providers, VoiceInk Refine, Local CLI, and any
             // provider without a mapping yet stay on Default.

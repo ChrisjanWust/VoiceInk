@@ -22,6 +22,10 @@ struct EnhancementModelPicker: View {
             && (isEditingCustomModel || (!draftModel.isEmpty && !models.contains(draftModel)))
     }
 
+    private var customModelPlaceholder: LocalizedStringKey {
+        provider == .bedrock ? "Model ID or inference profile ID" : "Model ID"
+    }
+
     private var trimmedDraft: String {
         customModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -64,7 +68,7 @@ struct EnhancementModelPicker: View {
             }
 
             if isCustomChoice {
-                TextField("Model ID", text: $customModelDraft)
+                TextField(customModelPlaceholder, text: $customModelDraft)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: customModelDraft) { _, newValue in
                         if isCustomChoice {

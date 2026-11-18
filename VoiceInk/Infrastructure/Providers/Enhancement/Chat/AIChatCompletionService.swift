@@ -80,6 +80,15 @@ extension AIService {
             }
             result = completion.text
             openRouterCompletion = completion
+        case .bedrock:
+            result = try await bedrockChatCompletion(
+                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                model: resolvedModel,
+                messages: messages,
+                systemPrompt: systemPrompt,
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
+            )
         case .custom:
             guard
                 let customConfiguration = CustomAIProviderManager.shared.requestConfiguration(forModel: resolvedModel),
@@ -197,6 +206,68 @@ extension AIService {
             throw EnhancementError.notConfigured
         }
         return key
+    }
+
+    private func bedrockChatCompletion(
+        apiKey: String,
+        model: String,
+        messages: [ChatMessage],
+        systemPrompt: String?,
+        timeout: TimeInterval,
+        retryOnTimeout: Bool
+    ) async throws -> String {
+        // Converse takes the system prompt as its own field, like Anthropic's Messages API.
+        let systemMessages = messages.filter { $0.role == "system" }.map(\.content)
+        let system = systemPrompt ?? (systemMessages.isEmpty ? nil : systemMessages.joined(separator: "\n"))
+        // Converse requires turns to alternate and start with the user. The Assistant can leave two user
+        // turns in a row after a failed reply, so merge same-role neighbours and drop a leading assistant turn.
+        var bedrockMessages: [BedrockMessage] = []
+        for message in messages {
+            let role: BedrockMessage.Role
+            switch message.role {
+            case "user":
+                role = .user
+            case "assistant":
+                role = .assistant
+            default:
+                continue
+            }
+            if bedrockMessages.isEmpty, role == .assistant {
+                continue
+            }
+            if let last = bedrockMessages.last, last.role == role {
+                bedrockMessages[bedrockMessages.count - 1] = BedrockMessage(
+                    role: role,
+                    text: last.text + "\n\n" + message.content
+                )
+            } else {
+                bedrockMessages.append(BedrockMessage(role: role, text: message.content))
+            }
+        }
+
+        do {
+            let completion = try await BedrockConverseClient.converse(
+                apiKey: apiKey,
+                region: BedrockRegion.current,
+                modelID: model,
+                systemPrompt: system,
+                messages: bedrockMessages,
+                timeout: timeout,
+                retryOnTimeout: retryOnTimeout
+            )
+            return completion.text
+        } catch let error as BedrockError {
+            switch error {
+            case .timeout:
+                throw EnhancementError.timeout
+            case .outputTruncated:
+                throw EnhancementError.outputTruncated
+            case .missingAPIKey:
+                throw EnhancementError.notConfigured
+            default:
+                throw EnhancementError.customError(error.localizedDescription)
+            }
+        }
     }
 
     private func chatPrompt(from messages: [ChatMessage]) -> String {

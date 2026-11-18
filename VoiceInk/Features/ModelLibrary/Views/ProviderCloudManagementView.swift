@@ -14,6 +14,7 @@ struct CloudProviderManagementView: View {
             .groq,
             .mistral,
             .cerebras,
+            .bedrock,
         ]
 
         var descriptors = enhancementProviders.map { aiProvider in
@@ -42,7 +43,7 @@ struct CloudProviderManagementView: View {
         }
 
         let preferredOrder = [
-            "Groq", "Cerebras", "Gemini", "OpenAI", "OpenRouter", "Anthropic", "Mistral",
+            "Groq", "Cerebras", "Gemini", "OpenAI", "OpenRouter", "Anthropic", "Mistral", "Amazon Bedrock",
             "Deepgram", "ElevenLabs", "Soniox", "Speechmatics", "AssemblyAI", "xAI", "Cartesia",
         ]
 
@@ -141,6 +142,12 @@ struct ProviderDescriptor: Identifiable {
         }
     }
 
+    /// SF Symbol for providers that ship without a brand asset.
+    var fallbackSymbolName: String? {
+        providerKey.caseInsensitiveCompare(AIProvider.bedrock.rawValue) == .orderedSame
+            ? "square.stack.3d.up.fill" : nil
+    }
+
     var apiConsoleURL: URL? {
         switch providerKey.lowercased() {
         case "groq":
@@ -171,6 +178,8 @@ struct ProviderDescriptor: Identifiable {
             return URL(string: "https://console.x.ai/")
         case "cartesia":
             return URL(string: "https://play.cartesia.ai/keys")
+        case "amazon bedrock":
+            return URL(string: "https://console.aws.amazon.com/bedrock/home#/api-keys")
         default:
             return nil
         }

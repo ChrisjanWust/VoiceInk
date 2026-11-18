@@ -231,6 +231,10 @@ private struct ModelProviderIdentity {
     private static func inferredEnhancementProvider(from modelName: String) -> AIProvider? {
         let lowercaseName = modelName.lowercased()
 
+        if isBedrockModelID(lowercaseName) {
+            return .bedrock
+        }
+
         if lowercaseName.hasPrefix("gemini-") {
             return .gemini
         }
@@ -252,6 +256,18 @@ private struct ModelProviderIdentity {
         }
 
         return nil
+    }
+
+    /// Bedrock IDs look like `vendor.model`, `us.vendor.model` or an ARN.
+    private static func isBedrockModelID(_ lowercaseName: String) -> Bool {
+        if lowercaseName.hasPrefix("arn:aws") || BedrockErrorDescriber.isInferenceProfileID(lowercaseName) {
+            return true
+        }
+        let bedrockVendors = [
+            "amazon.", "anthropic.", "meta.", "mistral.", "deepseek.", "openai.", "qwen.", "cohere.", "ai21.",
+            "google.", "moonshot.", "moonshotai.", "minimax.", "nvidia.", "writer.", "zai.", "xai.",
+        ]
+        return bedrockVendors.contains { lowercaseName.hasPrefix($0) }
     }
 
     private static func namesMatch(_ lhs: String, _ rhs: String) -> Bool {
