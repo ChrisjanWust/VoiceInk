@@ -150,16 +150,14 @@ enum AIProvider: String, CaseIterable, Sendable {
                 "mistral-large-latest",
             ]
         case .bedrock:
-            // global. profiles work from most commercial Regions. The others are in-Region model IDs.
+            // Each one answered VoiceInk's Default prompt in under 4 s in live tests on 2026-11-18.
+            // global. profiles work from most commercial Regions; the others are in-Region model IDs.
             return [
                 "global.amazon.nova-2-lite-v1:0",
-                "global.anthropic.claude-haiku-5-5",
                 "global.anthropic.claude-sonnet-5-5",
                 "global.openai.gpt-6-luna",
+                "qwen.qwen3-next-80b-a3b",
                 "openai.gpt-oss-120b-1:0",
-                "deepseek.v3.2",
-                "mistral.mistral-large-3-675b-instruct",
-                "qwen.qwen3-235b-a22b-2507-v1:0",
             ]
         case .elevenLabs:
             return ["scribe_v2", "scribe_v2_medical"]

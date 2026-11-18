@@ -221,6 +221,12 @@ enum BedrockErrorDescriber {
                 + awsSaid
         }
 
+        if lowercasedMessage.contains("end of its life") || lowercasedMessage.contains("end of life") {
+            return
+                "\(modelID) has been retired on Amazon Bedrock. Choose a current model."
+                + awsSaid
+        }
+
         if type == "ResourceNotFoundException" || statusCode == 404
             || lowercasedMessage.contains("model identifier is invalid")
             || lowercasedMessage.contains("model id is invalid")
@@ -483,6 +489,8 @@ enum BedrockConverseClient {
         let text = (decoded.output?.message?.content ?? [])
             .compactMap(\.text)
             .joined()
+            // Some models end lines with Markdown hard-break spaces, which would be pasted.
+            .replacingOccurrences(of: "[ \t]+(?=\n|$)", with: "", options: .regularExpression)
         return BedrockConverseResult(text: text, stopReason: decoded.stopReason)
     }
 
