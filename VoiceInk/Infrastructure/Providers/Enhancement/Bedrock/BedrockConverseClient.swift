@@ -33,11 +33,15 @@ enum BedrockRegion {
             return saved.isEmpty ? defaultRegion : saved
         }
         set {
+            let previous = current
             let value = normalized(newValue)
             if value.isEmpty {
                 UserDefaults.standard.removeObject(forKey: userDefaultsKey)
             } else {
                 UserDefaults.standard.set(value, forKey: userDefaultsKey)
+            }
+            if current != previous {
+                BedrockModelCatalog.regionDidChange()
             }
         }
     }
@@ -159,17 +163,8 @@ enum BedrockErrorDescriber {
         return inferenceProfilePrefixes.contains(String(prefix).lowercased())
     }
 
-    static func describe(
-        statusCode: Int,
-        errorType: String?,
-        message: String,
-        modelID: String,
-        region: String
-    ) -> String {
-        let type = errorType ?? ""
-        let lowercasedMessage = message.lowercased()
-        let awsSaid = message.isEmpty ? "" : " AWS said: \(message)"
-
+    /// A rejected or expired API key, as opposed to a model or permission problem.
+    static func isAuthError(statusCode: Int, errorType: String?, message: String) -> Bool {
         let authErrorTypes: Set<String> = [
             "UnrecognizedClientException",
             "InvalidClientTokenId",
@@ -182,9 +177,23 @@ enum BedrockErrorDescriber {
             "api key", "bearer", "security token", "authentication", "token has expired", "token is expired",
             "signature",
         ]
-        if authErrorTypes.contains(type) || statusCode == 401
+        let lowercasedMessage = message.lowercased()
+        return authErrorTypes.contains(errorType ?? "") || statusCode == 401
             || (statusCode == 403 && authPhrases.contains(where: { lowercasedMessage.contains($0) }))
-        {
+    }
+
+    static func describe(
+        statusCode: Int,
+        errorType: String?,
+        message: String,
+        modelID: String,
+        region: String
+    ) -> String {
+        let type = errorType ?? ""
+        let lowercasedMessage = message.lowercased()
+        let awsSaid = message.isEmpty ? "" : " AWS said: \(message)"
+
+        if isAuthError(statusCode: statusCode, errorType: errorType, message: message) {
             return
                 "Amazon Bedrock didn't accept this API key. Check that it's complete and hasn't expired. Short-term keys expire within 12 hours and only work in the Region where they were created (VoiceInk is using \(region))."
                 + awsSaid
@@ -301,7 +310,8 @@ enum BedrockErrorDescriber {
 ///
 /// `POST https://bedrock-runtime.{region}.amazonaws.com/model/{modelId}/converse`
 ///
-/// No inference or reasoning parameters are sent, so each model runs with its Bedrock defaults.
+/// By default no inference or reasoning parameters are sent, so each model runs with its Bedrock
+/// defaults. A picked reasoning level adds that model's own `additionalModelRequestFields`.
 /// Only `text` content blocks are returned; `reasoningContent` blocks are dropped.
 enum BedrockConverseClient {
     static func converse(
@@ -310,6 +320,7 @@ enum BedrockConverseClient {
         modelID: String,
         systemPrompt: String?,
         messages: [BedrockMessage],
+        reasoning: BedrockReasoningFields? = nil,
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false,
         maxRetries: Int = 2
@@ -320,6 +331,7 @@ enum BedrockConverseClient {
             modelID: modelID,
             systemPrompt: systemPrompt,
             messages: messages,
+            reasoning: reasoning,
             timeout: timeout
         )
         let normalizedRegion = BedrockRegion.normalized(region)
@@ -417,6 +429,7 @@ enum BedrockConverseClient {
         modelID: String,
         systemPrompt: String?,
         messages: [BedrockMessage],
+        reasoning: BedrockReasoningFields? = nil,
         timeout: TimeInterval
     ) throws -> URLRequest {
         let key = normalizedAPIKey(apiKey)
@@ -439,7 +452,7 @@ enum BedrockConverseClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(
-            ConverseRequestBody(systemPrompt: systemPrompt, messages: messages)
+            ConverseRequestBody(systemPrompt: systemPrompt, messages: messages, reasoning: reasoning)
         )
         return request
     }
@@ -536,16 +549,25 @@ private struct ConverseRequestBody: Encodable {
         let content: [TextBlock]
     }
 
+    struct InferenceConfig: Encodable {
+        let maxTokens: Int
+    }
+
     let messages: [Message]
     let system: [TextBlock]?
+    // Left out entirely on Default, so the request matches one with no reasoning level.
+    let additionalModelRequestFields: [String: BedrockJSONValue]?
+    let inferenceConfig: InferenceConfig?
 
-    init(systemPrompt: String?, messages: [BedrockMessage]) {
+    init(systemPrompt: String?, messages: [BedrockMessage], reasoning: BedrockReasoningFields? = nil) {
         self.messages = messages.map { Message(role: $0.role.rawValue, content: [TextBlock(text: $0.text)]) }
         if let systemPrompt, !systemPrompt.isEmpty {
             self.system = [TextBlock(text: systemPrompt)]
         } else {
             self.system = nil
         }
+        self.additionalModelRequestFields = reasoning?.additionalModelRequestFields
+        self.inferenceConfig = reasoning?.maxTokens.map(InferenceConfig.init(maxTokens:))
     }
 }
 
