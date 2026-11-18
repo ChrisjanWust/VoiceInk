@@ -324,7 +324,10 @@ struct ReasoningConfig {
 
     // MARK: - Mistral
 
-    // From Mistral's reasoning docs (2026-11-18). `reasoning_effort` is the only control.
+    // From Mistral's reasoning docs (2026-11-18), not live-tested: no Mistral key was
+    // available. `reasoning_effort` is the only control. Only the model IDs and values the
+    // docs name are offered. Any other ID, including the `-latest` aliases (the docs don't
+    // say which model they point to), stays on Default.
 
     // Mistral Small 4 and Medium 3.5 take "none" or "high".
     static let mistralNoneOrHighModels: Set<String> = [
@@ -344,20 +347,7 @@ struct ReasoningConfig {
         "zai-glm-5-3-flash",
     ]
 
-    // Models without a reasoning control.
-    static let mistralNonReasoningModelPrefixes = [
-        "ministral", "codestral", "devstral", "pixtral", "voxtral", "magistral",
-        "open-mistral", "open-mixtral", "mistral-tiny", "mistral-saba", "mistral-embed",
-        "mistral-ocr", "mistral-moderation",
-    ]
-
-    // Every documented Mistral effort. Used for model IDs not listed above.
-    static let mistralAllEffortLevels: [ReasoningLevel] = [.off, .low, .medium, .high, .max]
-
     private static func mistralLevels(for modelName: String) -> [ReasoningLevel] {
-        if mistralNonReasoningModelPrefixes.contains(where: { modelName.hasPrefix($0) }) {
-            return []
-        }
         if mistralNoneOrHighModels.contains(modelName) {
             return [.off, .high]
         }
@@ -367,7 +357,7 @@ struct ReasoningConfig {
         if mistralLowHighMaxModels.contains(modelName) {
             return [.low, .high, .max]
         }
-        return mistralAllEffortLevels
+        return []
     }
 
     private static func mistralDefaultLevel(for modelName: String) -> ReasoningLevel? {
@@ -497,9 +487,11 @@ struct ReasoningConfig {
             }
             return .off
         case .ollama:
-            // `think: false` runs models that can't turn thinking off at their lowest level.
-            if let lowest = ollamaLevels(for: modelInfo).first, lowest != .enabled {
-                return lowest
+            // Models with named levels (gpt-oss) can't turn thinking off, and `think: false`
+            // didn't run them at their lowest level in live tests: Default took 25-80 s on
+            // gpt-oss:20b and Low 2-4 s. So don't name what Default does for them.
+            if ollamaLevels(for: modelInfo) != [.enabled] {
+                return nil
             }
             return .off
         case .anthropic:
