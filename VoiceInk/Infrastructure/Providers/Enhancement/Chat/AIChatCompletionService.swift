@@ -21,6 +21,11 @@ extension AIService {
             for: provider
         )
         let reasoningLevel = EnhancementReasoningSettings.savedLevel(for: provider, model: resolvedModel)
+        let fastMode = FastModeConfig.parameters(
+            for: provider,
+            modelName: resolvedModel,
+            enabled: EnhancementFastModeSettings.isEnabled(for: provider, model: resolvedModel)
+        )
         let requestTimeout = ReasoningConfig.requestTimeout(
             timeout,
             retryOnTimeout: retryOnTimeout,
@@ -183,10 +188,13 @@ extension AIService {
                 modelName: resolvedModel,
                 level: reasoningLevel
             )
-            let extraBody = ReasoningConfig.getExtraBodyParameters(
-                for: provider,
-                modelName: resolvedModel,
-                level: reasoningLevel
+            let extraBody = FastModeConfig.merging(
+                fastMode,
+                into: ReasoningConfig.getExtraBodyParameters(
+                    for: provider,
+                    modelName: resolvedModel,
+                    level: reasoningLevel
+                )
             )
             result = try await OpenAILLMClient.chatCompletion(
                 baseURL: baseURL,
