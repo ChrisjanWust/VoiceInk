@@ -60,9 +60,7 @@ enum FastModeConfig {
     // MARK: - Shared
 
     /// Providers whose request path applies the parameters, so the toggle shows for them.
-    ///
-    /// Not here yet: Bedrock, until its request path moves to VoiceInkChat.
-    static let appliedProviders: Set<AIProvider> = [.openAI]
+    static let appliedProviders: Set<AIProvider> = [.openAI, .bedrock]
 
     /// The provider's fast-tier fields for this model, or `nil` when the model has none.
     ///
