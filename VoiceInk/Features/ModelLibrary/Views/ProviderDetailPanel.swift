@@ -540,6 +540,7 @@ struct ProviderDetailPanel: View {
                     apiKey = ""
                     verificationMessage = nil
                     verificationDetailMessage = nil
+                    liveModelsRefreshError = nil
                     transcriptionModelManager.refreshAllAvailableModels()
                     NotificationCenter.default.post(name: .aiProviderKeyChanged, object: nil)
                 } else {
@@ -557,6 +558,7 @@ struct ProviderDetailPanel: View {
         verificationSucceeded = false
         verificationMessage = nil
         verificationDetailMessage = nil
+        liveModelsRefreshError = nil
         transcriptionModelManager.refreshAllAvailableModels()
         NotificationCenter.default.post(name: .aiProviderKeyChanged, object: nil)
     }

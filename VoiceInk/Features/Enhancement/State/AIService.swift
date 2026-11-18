@@ -118,7 +118,6 @@ enum AIProvider: String, CaseIterable, Sendable {
                 "gemini-3.5-flash-lite",
                 "gemini-3.1-pro-preview",
                 "gemini-3.1-flash-lite",
-                "gemini-2.5-flash-lite",
             ]
         case .anthropic:
             return [
@@ -130,11 +129,7 @@ enum AIProvider: String, CaseIterable, Sendable {
             return [
                 "gpt-6-luna",
                 "gpt-6.1-terra",
-                "gpt-6.2-sol",
-                "gpt-6.2-astra",
-                "gpt-6.1-sol",
                 "gpt-6-sol",
-                "gpt-6-astra",
                 "gpt-5.6-luna",
                 "gpt-5.6-terra",
                 "gpt-5.6-sol",
@@ -896,7 +891,7 @@ class AIService: ObservableObject {
         defer { refreshingLiveModelProviders.remove(provider) }
 
         do {
-            let fetched = try await LiveModelListStore.shared.fetch(forProviderKey: provider.rawValue) {
+            let fetched = try await LiveModelListStore.shared.fetch(forProviderKey: provider.rawValue, apiKey: apiKey) {
                 switch provider {
                 case .gemini:
                     return try await ProviderModelCatalog.fetchGeminiModelIDs(apiKey: apiKey)
@@ -905,10 +900,13 @@ class AIService: ObservableObject {
                 }
             }
 
-            // The key may have been removed while the request was in flight.
-            guard APIKeyManager.shared.hasAPIKey(forProvider: provider.rawValue) else { return nil }
+            // The key may have been removed or replaced while the request was in flight.
+            guard APIKeyManager.shared.getAPIKey(forProvider: provider.rawValue) == apiKey else { return nil }
 
-            let models = orderedLiveModels(fetched, for: provider)
+            let models = orderedLiveModels(usableLiveModels(fetched, for: provider), for: provider)
+            guard !models.isEmpty else {
+                return ProviderModelCatalog.CatalogError.noUsableModels.localizedDescription
+            }
             if LiveModelListStore.shared.save(models, forProviderKey: provider.rawValue) {
                 NotificationCenter.default.post(name: .AppSettingsDidChange, object: nil)
             }
@@ -917,6 +915,13 @@ class AIService: ObservableObject {
             // Keep the last successful list during transient failures or when offline.
             return error.localizedDescription
         }
+    }
+
+    /// LLMkit always sends `temperature`, and OpenAI's reasoning models reject it unless
+    /// reasoning effort is `none`. So only offer the OpenAI models VoiceInk sends `none` to.
+    private func usableLiveModels(_ models: [String], for provider: AIProvider) -> [String] {
+        guard provider == .openAI else { return models }
+        return models.filter { ReasoningConfig.getReasoningParameter(for: .openAI, modelName: $0) == "none" }
     }
 
     /// Puts the default model first so the picker opens on the recommended choice.

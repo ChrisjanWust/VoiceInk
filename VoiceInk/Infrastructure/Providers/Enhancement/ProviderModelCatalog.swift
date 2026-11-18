@@ -128,14 +128,6 @@ enum ProviderModelCatalog {
         return models
     }
 
-    /// Filters one page each of the v1 and v1beta models lists.
-    static func geminiEnhancementModelIDs(stableData: Data, betaData: Data) throws -> [String] {
-        try geminiEnhancementModelIDs(
-            stable: decodeGeminiModelList(stableData).models ?? [],
-            beta: decodeGeminiModelList(betaData).models ?? []
-        )
-    }
-
     private static func decodeGeminiModelList(_ data: Data) throws -> GeminiModelList {
         do {
             return try JSONDecoder().decode(GeminiModelList.self, from: data)
@@ -175,6 +167,9 @@ enum ProviderModelCatalog {
     static func isGeminiEnhancementModel(_ id: String) -> Bool {
         let lowercased = id.lowercased()
         guard lowercased.hasPrefix("gemini-") || lowercased.hasPrefix("gemma-") else { return false }
+        // Gemini 1.x and 2.x reject a system instruction on /v1/interactions ("Developer
+        // instruction is not enabled for api version v1"), and enhancement always sends one.
+        if lowercased.range(of: #"^gemini-[12]\."#, options: .regularExpression) != nil { return false }
         // Moving aliases such as `gemini-flash-latest` are v1beta-only without a `-preview`
         // suffix, so LLMkit would send them to v1, which returns 404.
         if lowercased.hasSuffix("-latest") { return false }
@@ -187,7 +182,7 @@ enum ProviderModelCatalog {
 
     /// Matches pinned snapshot suffixes: `-2025-04-14`, `-0613`, `-001`, `-09-2025`.
     private static func hasDatedSuffix(_ id: String) -> Bool {
-        let patterns = [#"-\d{4}-\d{2}-\d{2}$"#, #"-\d{4}$"#, #"-\d{3}$"#, #"-\d{2}-\d{4}$"#]
+        let patterns = [#"-\d{4}-\d{2}-\d{2}$"#, #"-\d{3,4}$"#]
         return patterns.contains { id.range(of: $0, options: .regularExpression) != nil }
     }
 
@@ -295,20 +290,22 @@ final class LiveModelListStore: @unchecked Sendable {
         return existed
     }
 
-    /// Runs `operation`, or joins the request already in flight for this provider.
+    /// Runs `operation`, or joins the request already in flight for this provider and key.
     func fetch(
         forProviderKey providerKey: String,
+        apiKey: String,
         operation: @escaping @Sendable () async throws -> [String]
     ) async throws -> [String] {
+        let requestKey = "\(providerKey)\n\(apiKey)"
         let (task, isOwner): (Task<[String], Error>, Bool) = lock.withLock {
-            if let existing = inFlight[providerKey] { return (existing, false) }
+            if let existing = inFlight[requestKey] { return (existing, false) }
             let task = Task { try await operation() }
-            inFlight[providerKey] = task
+            inFlight[requestKey] = task
             return (task, true)
         }
         defer {
             if isOwner {
-                lock.withLock { inFlight[providerKey] = nil }
+                lock.withLock { inFlight[requestKey] = nil }
             }
         }
         return try await task.value
