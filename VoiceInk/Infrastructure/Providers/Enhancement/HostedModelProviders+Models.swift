@@ -49,7 +49,6 @@ extension HostedModelProviders {
         "deepseek-ai/DeepSeek-V4.1-Flash",
         "Qwen/Qwen3.6-35B-A3B",
         "zai-org/GLM-5.3",
-        "google/gemini-3.5-flash-lite",
         "openai/gpt-6-luna",
     ]
 
@@ -102,7 +101,8 @@ extension HostedModelProviders {
         "google/gemini-3.1-flash-lite-preview": ModelReasoning(defaultEffort: nil, levels: [.minimal, .low, .medium, .high, .xhigh, .max]),
         "google/gemini-3.1-pro-preview": ModelReasoning(defaultEffort: "minimal", levels: [.minimal, .low, .medium, .xhigh, .max]),
         "google/gemini-3.5-flash": ModelReasoning(defaultEffort: "low", levels: [.low, .max]),
-        "google/gemini-3.5-flash-lite": ModelReasoning(defaultEffort: "none", levels: [.off, .minimal, .low, .medium, .high, .max]),
+        // Erratic on GMI: the same request took 1.5–151 s, and High and Max ran over 2 minutes.
+        "google/gemini-3.5-flash-lite": ModelReasoning(defaultEffort: "none", levels: [.off, .minimal, .low, .medium]),
         "google/gemini-3.6-flash": ModelReasoning(defaultEffort: "none", levels: [.off, .minimal, .low, .medium, .high, .xhigh, .max]),
         "google/gemini-3.7-flash": ModelReasoning(defaultEffort: "none", levels: [.off, .minimal, .low, .medium, .high, .xhigh, .max]),
         "google/gemini-3.8-flash": ModelReasoning(defaultEffort: "minimal", levels: [.minimal, .low, .medium, .high]),
@@ -225,6 +225,9 @@ extension HostedModelProviders {
 
     /// Model IDs or ID fragments that fail VoiceInk's request or ignore its prompt.
     static let vercelAIGatewayUnusableTokens: [String] = [
+        "alibaba/qwen-3-14b", // 400: asks for more output tokens than its context window
+        "alibaba/qwen-3-30b",
+        "alibaba/qwen3-max-thinking", // 404: listed but not served
         "inference-net/schematron",
         "morph/",
         "tencent/hy-mt2-lite",
