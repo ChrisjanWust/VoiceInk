@@ -213,6 +213,8 @@ enum AIProvider: String, CaseIterable, Sendable {
             return true
         case .anthropic, .groq, .cerebras, .mistral:
             return true
+        case .bedrock:
+            return true
         default:
             return false
         }
@@ -864,6 +866,8 @@ class AIService: ObservableObject {
         case .mistral:
             let aliasTargets = LiveModelListStore.shared.aliasTargets(forProviderKey: provider.rawValue)
             return ReasoningModelInfo(mistralAliasTargets: aliasTargets?[model] ?? [])
+        case .bedrock:
+            return ReasoningModelInfo(bedrockModel: BedrockModelDetailsStore.shared.info(forInvocationID: model))
         default:
             return ReasoningModelInfo()
         }
@@ -954,13 +958,28 @@ class AIService: ObservableObject {
         }
         guard !refreshingLiveModelProviders.contains(provider) else { return nil }
         refreshingLiveModelProviders.insert(provider)
-        defer { refreshingLiveModelProviders.remove(provider) }
+        // Bedrock lists differ per Region, so a fetch for one Region must not serve another.
+        let bedrockRegion = BedrockRegion.current
+        defer {
+            refreshingLiveModelProviders.remove(provider)
+            if provider == .bedrock, BedrockRegion.current != bedrockRegion {
+                // The Region changed mid-fetch, and its own fetch was skipped while this one
+                // ran. Fetch again, whether this one succeeded or failed.
+                Task { @MainActor [weak self] in
+                    _ = await self?.fetchLiveModels(for: provider)
+                }
+            }
+        }
+
+        let requestScope = provider == .bedrock ? "\(apiKey)\n\(bedrockRegion)" : apiKey
 
         do {
-            let fetched = try await LiveModelListStore.shared.fetch(forProviderKey: provider.rawValue, apiKey: apiKey) {
+            let fetched = try await LiveModelListStore.shared.fetch(forProviderKey: provider.rawValue, apiKey: requestScope) {
                 switch provider {
                 case .gemini:
                     return try await ProviderModelCatalog.fetchGeminiModelIDs(apiKey: apiKey)
+                case .bedrock:
+                    return try await BedrockModelCatalog.fetchModelIDs(apiKey: apiKey, region: bedrockRegion)
                 case .anthropic:
                     return try await ProviderModelCatalog.fetchAnthropicModelIDs(apiKey: apiKey)
                 case .groq:
@@ -976,6 +995,8 @@ class AIService: ObservableObject {
 
             // The key may have been removed or replaced while the request was in flight.
             guard APIKeyManager.shared.getAPIKey(forProvider: provider.rawValue) == apiKey else { return nil }
+            // A list for a Region that's no longer selected; the deferred fetch replaces it.
+            guard provider != .bedrock || BedrockRegion.current == bedrockRegion else { return nil }
 
             let models = orderedLiveModels(usableLiveModels(fetched, for: provider), for: provider)
             guard !models.isEmpty else {

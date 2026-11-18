@@ -15,6 +15,8 @@ struct ReasoningModelInfo {
     /// `mistral-small-latest` this is the dated ID, such as `mistral-small-2603`. Empty when
     /// unknown (offline, no key, or the built-in list).
     var mistralAliasTargets: [String] = []
+    /// The Bedrock model's live catalog entry, with its reasoning schema. `nil` for custom IDs.
+    var bedrockModel: BedrockModelInfo? = nil
 }
 
 /// Reasoning parameters for enhancement requests.
@@ -458,9 +460,8 @@ struct ReasoningConfig {
         case .mistral:
             return mistralLevels(for: modelName, aliasTargets: modelInfo.mistralAliasTargets)
         case .bedrock:
-            // Converse sends no reasoning parameters, so each Bedrock model runs on its
-            // own default. Mapping levels needs per-model `additionalModelRequestFields`.
-            return []
+            // Read from the model's live catalog schema; custom IDs stay on Default.
+            return BedrockReasoning.levels(for: modelInfo.bedrockModel)
         default:
             // Transcription-only providers, VoiceInk Refine, Local CLI, and any
             // provider without a mapping yet stay on Default.
@@ -522,6 +523,8 @@ struct ReasoningConfig {
             return anthropicDefaultEffort(for: modelName)
         case .mistral:
             return mistralDefaultLevel(for: modelName, aliasTargets: modelInfo.mistralAliasTargets)
+        case .bedrock:
+            return BedrockReasoning.defaultLevel(for: modelInfo.bedrockModel)
         default:
             return getReasoningParameter(for: provider, modelName: modelName)
                 .flatMap(ReasoningLevel.init(effortValue:))

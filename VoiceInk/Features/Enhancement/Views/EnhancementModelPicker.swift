@@ -67,6 +67,13 @@ struct EnhancementModelPicker: View {
                 syncCustomModelDraft()
             }
 
+            if provider == .bedrock, let caption = BedrockModelCatalog.slowModelCaption(for: draftModel) {
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if isCustomChoice {
                 TextField(customModelPlaceholder, text: $customModelDraft)
                     .textFieldStyle(.roundedBorder)

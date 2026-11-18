@@ -40,6 +40,7 @@ extension AIService {
                 modelInfo: reasoningModelInfo(for: provider, model: resolvedModel)
             )
         )
+        .raised(toAtLeast: provider == .bedrock ? BedrockModelCatalog.minimumTimeout(forModel: resolvedModel) : nil)
 
         if provider == .mistral,
             let reasoningEffort = ReasoningConfig.mistralReasoningEffort(
@@ -135,6 +136,10 @@ extension AIService {
                 model: resolvedModel,
                 messages: messages,
                 systemPrompt: systemPrompt,
+                reasoning: BedrockReasoning.fields(
+                    for: reasoningLevel,
+                    model: reasoningModelInfo(for: .bedrock, model: resolvedModel).bedrockModel
+                ),
                 timeout: requestTimeout.seconds,
                 retryOnTimeout: requestTimeout.retryOnTimeout
             )
@@ -265,6 +270,7 @@ extension AIService {
         model: String,
         messages: [ChatMessage],
         systemPrompt: String?,
+        reasoning: BedrockReasoningFields?,
         timeout: TimeInterval,
         retryOnTimeout: Bool
     ) async throws -> String {
@@ -304,6 +310,7 @@ extension AIService {
                 modelID: model,
                 systemPrompt: system,
                 messages: bedrockMessages,
+                reasoning: reasoning,
                 timeout: timeout,
                 retryOnTimeout: retryOnTimeout
             )
