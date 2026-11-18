@@ -47,6 +47,7 @@ struct ReasoningConfig {
         "gpt-5.4-mini",
         "gpt-5.4-nano",
         "gpt-6.1-terra",
+        "gpt-5.2",
     ]
 
     // Cerebras GPT-OSS has no true "none"; use lowest effort.
