@@ -36,15 +36,6 @@ struct ReasoningConfig {
         "gemini-3.1-flash-lite",
     ]
 
-    // Thinking is off by default. LLMkit sends non-preview models to `/v1/interactions`,
-    // which rejects every thinking level for these ("Thinking is not enabled for api
-    // version v1"), so they stay on Default. (`/v1beta` accepts only "low" and "high".)
-    static let geminiThinkingOffByDefaultModels: Set<String> = [
-        "gemini-2.5-flash-lite"
-    ]
-
-    // Gemini 2.5 Flash-Lite gets no default level because its Interactions
-    // API default has thinking off.
     static func geminiThinkingLevel(for modelName: String, level: ReasoningLevel? = nil) -> GeminiThinkingLevel? {
         if let level = effectiveLevel(level, for: .gemini, modelName: modelName) {
             return geminiThinkingLevel(from: level)
@@ -71,9 +62,6 @@ struct ReasoningConfig {
     // Verified live on 2026-11-17. The API also lists "xhigh", but LLMkit's
     // GeminiThinkingLevel can't send it yet.
     private static func geminiLevels(for modelName: String) -> [ReasoningLevel] {
-        if geminiThinkingOffByDefaultModels.contains(modelName) {
-            return []
-        }
         if geminiLowThinkingModels.contains(modelName) {
             return [.low, .medium, .high]
         }
@@ -275,7 +263,7 @@ struct ReasoningConfig {
             case .low: return .low
             case .medium: return .medium
             case .high: return .high
-            case nil: return geminiThinkingOffByDefaultModels.contains(modelName) ? .off : nil
+            case nil: return nil
             }
         case .openRouter:
             guard let openRouterModel = modelInfo.openRouterModel,
