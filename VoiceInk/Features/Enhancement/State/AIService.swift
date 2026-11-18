@@ -113,15 +113,16 @@ enum AIProvider: String, CaseIterable, Sendable {
                 "openai/gpt-oss-20b",
             ]
         case .gemini:
+            // Offline fallback; AIService replaces it with the live list once a key is set.
             return [
                 "gemini-3.8-flash",
-                "gemini-3.7-flash",
+                "gemini-4-hydrogen",
+                "gemini-4-argon",
+                "gemini-4-carbon",
                 "gemini-3.6-flash",
                 "gemini-3.5-flash-lite",
-                "gemini-3.5-flash",
                 "gemini-3.1-pro-preview",
                 "gemini-3.1-flash-lite",
-                "gemini-2.5-flash-lite",
             ]
         case .anthropic:
             return [
@@ -129,8 +130,10 @@ enum AIProvider: String, CaseIterable, Sendable {
                 "claude-haiku-5-5",
             ]
         case .openAI:
+            // Offline fallback; AIService replaces it with the live list once a key is set.
             return [
                 "gpt-6-luna",
+                "gpt-6.1-terra",
                 "gpt-6-sol",
                 "gpt-5.6-luna",
                 "gpt-5.6-terra",
@@ -138,10 +141,6 @@ enum AIProvider: String, CaseIterable, Sendable {
                 "gpt-5.5",
                 "gpt-5.4",
                 "gpt-5.4-mini",
-                "gpt-5.4-nano",
-                "gpt-4.1",
-                "gpt-4.1-mini",
-                "gpt-4.1-nano",
             ]
         case .mistral:
             return [
@@ -200,6 +199,16 @@ enum AIProvider: String, CaseIterable, Sendable {
             return false
         default:
             return true
+        }
+    }
+
+    /// Providers whose enhancement model list is fetched from their models endpoint.
+    var fetchesLiveModelList: Bool {
+        switch self {
+        case .gemini, .openAI:
+            return true
+        default:
+            return false
         }
     }
 
@@ -274,6 +283,9 @@ class AIService: ObservableObject {
     @Published private var openRouterModels: [String] = []
     @Published private var openRouterModelCatalog: [OpenRouterModel] = []
     private var isOpenRouterCatalogRefreshing = false
+    @Published private(set) var refreshingLiveModelProviders: Set<AIProvider> = []
+    private var liveModelListObserver: NSObjectProtocol?
+    private static let liveModelListRefreshInterval: TimeInterval = 24 * 60 * 60
     @Published private(set) var isOllamaRefreshing = false
 
     var connectedProviders: [AIProvider] {
@@ -330,7 +342,7 @@ class AIService: ObservableObject {
             return savedModel
         }
         let selectedModel = selectedModel(for: provider)
-        return provider.availableModels.contains(selectedModel) ? "" : selectedModel
+        return availableModels(for: provider).contains(selectedModel) ? "" : selectedModel
     }
 
     var availableModels: [String] {
@@ -356,6 +368,10 @@ class AIService: ObservableObject {
             return openRouterModels
         } else if provider == .custom {
             return CustomAIProviderManager.shared.availableModelNames
+        } else if provider.fetchesLiveModelList,
+            let models = LiveModelListStore.shared.models(forProviderKey: provider.rawValue)
+        {
+            return models
         }
         return provider.availableModels
     }
@@ -364,6 +380,7 @@ class AIService: ObservableObject {
         if userDefaults.string(forKey: "selectedAIProvider") == "GROQ" {
             userDefaults.set("Groq", forKey: "selectedAIProvider")
         }
+        GeminiModelMigration.migrateSavedSelection(in: userDefaults)
 
         if let savedProvider = userDefaults.string(forKey: "selectedAIProvider"),
             let provider = AIProvider(rawValue: savedProvider)
@@ -419,6 +436,17 @@ class AIService: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.reloadSelectedProviderConfiguration()
+                self.syncLiveProviderModelsWithAPIKeys()
+            }
+        }
+
+        liveModelListObserver = NotificationCenter.default.addObserver(
+            forName: LiveModelListStore.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.objectWillChange.send()
             }
         }
     }
@@ -426,6 +454,9 @@ class AIService: ObservableObject {
     deinit {
         if let apiKeyChangeObserver {
             NotificationCenter.default.removeObserver(apiKeyChangeObserver)
+        }
+        if let liveModelListObserver {
+            NotificationCenter.default.removeObserver(liveModelListObserver)
         }
         voiceInkRefineObserver?.cancel()
     }
@@ -533,7 +564,7 @@ class AIService: ObservableObject {
         selectedModels[provider] = resolvedModel
         let key = "\(provider.rawValue)SelectedModel"
         userDefaults.set(resolvedModel, forKey: key)
-        if provider.supportsCustomModelID, !provider.availableModels.contains(resolvedModel) {
+        if provider.supportsCustomModelID, !availableModels(for: provider).contains(resolvedModel) {
             userDefaults.set(resolvedModel, forKey: "\(provider.rawValue)CustomModelID")
         }
 
@@ -834,5 +865,104 @@ class AIService: ObservableObject {
         } catch {
             // Keep the last successful catalog during transient OpenRouter failures.
         }
+    }
+
+    // MARK: - Live Gemini and OpenAI model lists
+
+    /// Keeps the cached live lists tied to a saved key: drops a list when its key is removed,
+    /// and fetches one for a newly added key.
+    private func syncLiveProviderModelsWithAPIKeys() {
+        var didChange = false
+        for provider in AIProvider.allCases where provider.fetchesLiveModelList {
+            if APIKeyManager.shared.hasAPIKey(forProvider: provider.rawValue) {
+                if LiveModelListStore.shared.models(forProviderKey: provider.rawValue) == nil {
+                    Task { @MainActor [weak self] in
+                        _ = await self?.fetchLiveModels(for: provider)
+                    }
+                }
+            } else if LiveModelListStore.shared.clear(forProviderKey: provider.rawValue) {
+                didChange = true
+            }
+        }
+        if didChange {
+            NotificationCenter.default.post(name: .AppSettingsDidChange, object: nil)
+        }
+    }
+
+    /// Refreshes the Gemini and OpenAI model lists at launch when a key is saved and the
+    /// cached list is missing or older than a day.
+    @MainActor
+    func refreshLiveProviderModelsIfNeeded() async {
+        for provider in AIProvider.allCases where provider.fetchesLiveModelList {
+            guard APIKeyManager.shared.hasAPIKey(forProvider: provider.rawValue) else { continue }
+            let store = LiveModelListStore.shared
+            if store.models(forProviderKey: provider.rawValue) != nil,
+                let fetchedAt = store.fetchedAt(forProviderKey: provider.rawValue),
+                Date().timeIntervalSince(fetchedAt) < Self.liveModelListRefreshInterval
+            {
+                continue
+            }
+            _ = await fetchLiveModels(for: provider)
+        }
+    }
+
+    func isRefreshingLiveModels(for provider: AIProvider) -> Bool {
+        refreshingLiveModelProviders.contains(provider)
+    }
+
+    /// Fetches the provider's current models with the saved key. Returns an error message on
+    /// failure; the last successful list (or the built-in fallback) stays in place.
+    @MainActor
+    @discardableResult
+    func fetchLiveModels(for provider: AIProvider) async -> String? {
+        guard provider.fetchesLiveModelList else { return nil }
+        guard let apiKey = APIKeyManager.shared.getAPIKey(forProvider: provider.rawValue), !apiKey.isEmpty else {
+            return String(localized: "Add an API key to load the latest models.")
+        }
+        guard !refreshingLiveModelProviders.contains(provider) else { return nil }
+        refreshingLiveModelProviders.insert(provider)
+        defer { refreshingLiveModelProviders.remove(provider) }
+
+        do {
+            let fetched = try await LiveModelListStore.shared.fetch(forProviderKey: provider.rawValue, apiKey: apiKey) {
+                switch provider {
+                case .gemini:
+                    return try await ProviderModelCatalog.fetchGeminiModelIDs(apiKey: apiKey)
+                default:
+                    return try await ProviderModelCatalog.fetchOpenAIModelIDs(apiKey: apiKey)
+                }
+            }
+
+            // The key may have been removed or replaced while the request was in flight.
+            guard APIKeyManager.shared.getAPIKey(forProvider: provider.rawValue) == apiKey else { return nil }
+
+            let models = orderedLiveModels(usableLiveModels(fetched, for: provider), for: provider)
+            guard !models.isEmpty else {
+                return ProviderModelCatalog.CatalogError.noUsableModels.localizedDescription
+            }
+            if LiveModelListStore.shared.save(models, forProviderKey: provider.rawValue) {
+                NotificationCenter.default.post(name: .AppSettingsDidChange, object: nil)
+            }
+            return nil
+        } catch {
+            // Keep the last successful list during transient failures or when offline.
+            return error.localizedDescription
+        }
+    }
+
+    /// LLMkit always sends `temperature`, and OpenAI's reasoning models reject it unless
+    /// reasoning effort is `none`. So only offer the OpenAI models VoiceInk sends `none` to.
+    private func usableLiveModels(_ models: [String], for provider: AIProvider) -> [String] {
+        guard provider == .openAI else { return models }
+        return models.filter { ReasoningConfig.getReasoningParameter(for: .openAI, modelName: $0) == "none" }
+    }
+
+    /// Puts the default model first so the picker opens on the recommended choice.
+    private func orderedLiveModels(_ models: [String], for provider: AIProvider) -> [String] {
+        guard let defaultIndex = models.firstIndex(of: provider.defaultModel) else { return models }
+        var ordered = models
+        ordered.remove(at: defaultIndex)
+        ordered.insert(provider.defaultModel, at: 0)
+        return ordered
     }
 }

@@ -389,6 +389,16 @@ class AIEnhancementService: ObservableObject {
         var didUpdateModes = false
 
         for index in updatedConfigurations.indices {
+            if updatedConfigurations[index].selectedAIProvider == AIProvider.gemini.rawValue,
+                let modelName = updatedConfigurations[index].selectedAIModel
+            {
+                let currentModel = GeminiModelMigration.resolvedModel(modelName, for: .gemini)
+                if currentModel != modelName {
+                    updatedConfigurations[index].selectedAIModel = currentModel
+                    didUpdateModes = true
+                }
+            }
+
             if updatedConfigurations[index].selectedAIProvider == AIProvider.voiceInkRefine.rawValue {
                 if updatedConfigurations[index].selectedAIModel != VoiceInkRefineService.modelName {
                     updatedConfigurations[index].selectedAIModel = VoiceInkRefineService.modelName

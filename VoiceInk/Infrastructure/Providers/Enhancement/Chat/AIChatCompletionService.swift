@@ -25,12 +25,13 @@ extension AIService {
         var openRouterCompletion: OpenRouterCompletion? = nil
         switch provider {
         case .gemini:
+            let geminiModel = GeminiModelMigration.resolvedModel(resolvedModel, for: .gemini)
             result = try await GeminiLLMClient.chatCompletion(
-                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                model: resolvedModel,
+                apiKey: try chatAPIKey(for: provider, modelName: geminiModel),
+                model: geminiModel,
                 messages: messages,
                 systemPrompt: systemPrompt,
-                thinkingLevel: ReasoningConfig.geminiThinkingLevel(for: resolvedModel),
+                thinkingLevel: ReasoningConfig.geminiThinkingLevel(for: geminiModel),
                 store: false,
                 timeout: timeout,
                 retryOnTimeout: retryOnTimeout

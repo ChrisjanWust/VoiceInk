@@ -11,6 +11,7 @@ struct ProviderDetailPanel: View {
     @State private var apiKey = ""
     @State private var isVerifying = false
     @State private var isRefreshingOpenRouterModels = false
+    @State private var liveModelsRefreshError: String?
     @State private var verificationMessage: String?
     @State private var verificationDetailMessage: String?
     @State private var verificationSucceeded = false
@@ -314,6 +315,8 @@ struct ProviderDetailPanel: View {
             ProviderModelListSection(title: "Available Enhancement Models") {
                 if provider == .openRouter {
                     openRouterCatalogStatus(modelCount: models.count)
+                } else if provider.fetchesLiveModelList {
+                    liveModelListStatus(for: provider, modelCount: models.count)
                 }
 
                 if provider != .openRouter && models.isEmpty {
@@ -381,6 +384,52 @@ struct ProviderDetailPanel: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(isRefreshingOpenRouterModels)
+        }
+        .padding(.vertical, 8)
+    }
+
+    private func liveModelListStatus(for provider: AIProvider, modelCount: Int) -> some View {
+        let isRefreshing = aiService.isRefreshingLiveModels(for: provider)
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Text(
+                    isConfigured
+                        ? openRouterModelAvailabilityText(for: modelCount)
+                        : String(localized: "Built-in list. Add an API key to load the latest models.")
+                )
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isConfigured ? .primary : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                Spacer()
+
+                Button {
+                    refreshLiveModels(for: provider)
+                } label: {
+                    HStack(spacing: 5) {
+                        if isRefreshing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        Text(isRefreshing ? LocalizedStringKey("Refreshing") : LocalizedStringKey("Refresh"))
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isRefreshing || !isConfigured)
+                .help("Load the latest models from the provider")
+            }
+
+            if let liveModelsRefreshError {
+                Text(liveModelsRefreshError)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.Status.error)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.vertical, 8)
     }
@@ -454,6 +503,7 @@ struct ProviderDetailPanel: View {
         apiKey = ""
         isVerifying = false
         isRefreshingOpenRouterModels = false
+        liveModelsRefreshError = nil
         verificationMessage = nil
         verificationDetailMessage = nil
         isShowingRemoveAPIKeyConfirmation = false
@@ -515,6 +565,7 @@ struct ProviderDetailPanel: View {
                     apiKey = ""
                     verificationMessage = nil
                     verificationDetailMessage = nil
+                    liveModelsRefreshError = nil
                     transcriptionModelManager.refreshAllAvailableModels()
                     NotificationCenter.default.post(name: .aiProviderKeyChanged, object: nil)
                 } else {
@@ -532,8 +583,20 @@ struct ProviderDetailPanel: View {
         verificationSucceeded = false
         verificationMessage = nil
         verificationDetailMessage = nil
+        liveModelsRefreshError = nil
         transcriptionModelManager.refreshAllAvailableModels()
         NotificationCenter.default.post(name: .aiProviderKeyChanged, object: nil)
+    }
+
+    private func refreshLiveModels(for provider: AIProvider) {
+        liveModelsRefreshError = nil
+        let providerID = descriptor.id
+
+        Task { @MainActor in
+            let errorMessage = await aiService.fetchLiveModels(for: provider)
+            guard activeDescriptorID == providerID else { return }
+            liveModelsRefreshError = errorMessage
+        }
     }
 
     private func refreshOpenRouterModels() {
