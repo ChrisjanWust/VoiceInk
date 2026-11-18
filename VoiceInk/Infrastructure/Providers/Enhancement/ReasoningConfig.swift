@@ -203,6 +203,15 @@ struct ReasoningConfig {
     /// Levels the user may pick for this model, besides Default. Empty means the
     /// model only runs on Default, either because it has no reasoning control or
     /// because LLMkit cannot send that provider's control yet.
+    ///
+    /// Adding reasoning for a provider (new providers start on Default only):
+    /// 1. Return its levels here, from a `<provider>Levels(for:)` helper with the
+    ///    provider's model sets above.
+    /// 2. Map a level to request parameters: `getReasoningParameter` and
+    ///    `getExtraBodyParameters` for OpenAI-compatible APIs, or a dedicated
+    ///    function like `geminiThinkingLevel(for:level:)` for native APIs.
+    /// 3. Pass the level through in `AIService.performChatCompletion`.
+    /// 4. If Default sends a parameter today, describe it in `defaultLevel`.
     static func supportedLevels(
         for provider: AIProvider,
         modelName: String,
@@ -228,7 +237,9 @@ struct ReasoningConfig {
             // Need LLMkit support: Anthropic `output_config.effort`, and Mistral's
             // chunked `content` that holds thinking.
             return []
-        case .elevenLabs, .deepgram, .soniox, .speechmatics, .assemblyAI, .voiceInkRefine, .localCLI:
+        default:
+            // Transcription-only providers, VoiceInk Refine, Local CLI, and any
+            // provider without a mapping yet stay on Default.
             return []
         }
     }
