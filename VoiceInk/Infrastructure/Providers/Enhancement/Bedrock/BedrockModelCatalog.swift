@@ -269,9 +269,39 @@ enum BedrockModelCatalog {
                 data: data,
                 errorTypeHeader: http.value(forHTTPHeaderField: "x-amzn-ErrorType")
             )
-            throw ProviderModelCatalog.CatalogError.httpError(statusCode: http.statusCode, message: parsed.message)
+            throw ListError(statusCode: http.statusCode, errorType: parsed.errorType, message: parsed.message, region: region)
         }
         return data
+    }
+
+    /// A failed list call. The built-in list stays in use, and model IDs can still be typed in.
+    struct ListError: LocalizedError, Equatable {
+        let statusCode: Int
+        let errorType: String?
+        let message: String
+        let region: String
+
+        var errorDescription: String? {
+            let awsSaid = message.isEmpty ? "" : " AWS said: \(message)"
+            if BedrockErrorDescriber.isAuthError(statusCode: statusCode, errorType: errorType, message: message) {
+                return BedrockErrorDescriber.describe(
+                    statusCode: statusCode,
+                    errorType: errorType,
+                    message: message,
+                    modelID: "",
+                    region: region
+                )
+            }
+            if statusCode == 403 || errorType == "AccessDeniedException" {
+                return
+                    "This API key isn't allowed to list Amazon Bedrock models in \(region). Its IAM permissions need bedrock:ListFoundationModels and bedrock:ListInferenceProfiles. You can still enter a model ID."
+                    + awsSaid
+            }
+            if statusCode == 429 || errorType == "ThrottlingException" {
+                return "Amazon Bedrock is throttling requests. Try again shortly." + awsSaid
+            }
+            return "Amazon Bedrock couldn't list models (HTTP \(statusCode))." + awsSaid
+        }
     }
 
     // MARK: - Response models

@@ -163,17 +163,8 @@ enum BedrockErrorDescriber {
         return inferenceProfilePrefixes.contains(String(prefix).lowercased())
     }
 
-    static func describe(
-        statusCode: Int,
-        errorType: String?,
-        message: String,
-        modelID: String,
-        region: String
-    ) -> String {
-        let type = errorType ?? ""
-        let lowercasedMessage = message.lowercased()
-        let awsSaid = message.isEmpty ? "" : " AWS said: \(message)"
-
+    /// A rejected or expired API key, as opposed to a model or permission problem.
+    static func isAuthError(statusCode: Int, errorType: String?, message: String) -> Bool {
         let authErrorTypes: Set<String> = [
             "UnrecognizedClientException",
             "InvalidClientTokenId",
@@ -186,9 +177,23 @@ enum BedrockErrorDescriber {
             "api key", "bearer", "security token", "authentication", "token has expired", "token is expired",
             "signature",
         ]
-        if authErrorTypes.contains(type) || statusCode == 401
+        let lowercasedMessage = message.lowercased()
+        return authErrorTypes.contains(errorType ?? "") || statusCode == 401
             || (statusCode == 403 && authPhrases.contains(where: { lowercasedMessage.contains($0) }))
-        {
+    }
+
+    static func describe(
+        statusCode: Int,
+        errorType: String?,
+        message: String,
+        modelID: String,
+        region: String
+    ) -> String {
+        let type = errorType ?? ""
+        let lowercasedMessage = message.lowercased()
+        let awsSaid = message.isEmpty ? "" : " AWS said: \(message)"
+
+        if isAuthError(statusCode: statusCode, errorType: errorType, message: message) {
             return
                 "Amazon Bedrock didn't accept this API key. Check that it's complete and hasn't expired. Short-term keys expire within 12 hours and only work in the Region where they were created (VoiceInk is using \(region))."
                 + awsSaid
