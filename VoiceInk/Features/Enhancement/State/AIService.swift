@@ -172,11 +172,11 @@ enum AIProvider: String, CaseIterable, Sendable {
             ]
         case .mistral:
             // Offline fallback; AIService replaces it with the live list once a key is set.
-            // No Mistral Large 4 (`mistral-large-4`, `mistral-large-latest`): it always reasons,
-            // so its replies come as thinking and text chunks that LLMkit can't read.
+            // Mistral Large 4 always reasons; Default sends its lowest effort (ReasoningConfig).
             return [
                 "mistral-small-latest",
                 "mistral-medium-latest",
+                "mistral-large-latest",
             ]
         case .bedrock:
             // Each one answered VoiceInk's Default prompt in under 4 s in live tests on 2026-11-18.

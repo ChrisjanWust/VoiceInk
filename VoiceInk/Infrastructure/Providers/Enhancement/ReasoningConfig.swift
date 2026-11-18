@@ -355,13 +355,32 @@ struct ReasoningConfig {
         "mistral-medium-3-5",
     ]
 
-    // Mistral Large 4 and GLM 5.3 also take `reasoning_effort`, but they always reason, so
-    // neither list offers them (`ProviderModelCatalog.mistralAlwaysReasoningTokens`).
+    // Mistral Large 4 always reasons (it can't take "none") and defaults to "high"; it takes
+    // "low", "medium" or "high". `mistral-large-latest` points to it. Its replies are thinking
+    // and text chunks, which VoiceInkChat reads (LLMkit couldn't, so it wasn't offered before).
+    static let mistralLargeReasoningModels: Set<String> = [
+        "mistral-large-4", "mistral-large-4-0", "mistral-large-latest",
+    ]
+
+    // GLM 5.3 and 5.3 Flash also always reason, with "low", "high" or "max".
+    static let mistralGLMReasoningModels: Set<String> = ["zai-glm-5-3", "zai-glm-5-3-flash"]
 
     /// The model itself or, for a `-latest` alias, a dated ID it points to. Requests still
     /// send `modelName`.
     private static func mistralLevels(for modelName: String, aliasTargets: [String]) -> [ReasoningLevel] {
-        ([modelName] + aliasTargets).contains(where: mistralNoneOrHighModels.contains) ? [.off, .high] : []
+        let ids = [modelName] + aliasTargets
+        if ids.contains(where: mistralNoneOrHighModels.contains) { return [.off, .high] }
+        if ids.contains(where: mistralLargeReasoningModels.contains) { return [.low, .medium, .high] }
+        if ids.contains(where: mistralGLMReasoningModels.contains) { return [.low, .high, .max] }
+        return []
+    }
+
+    /// Default for the models that always reason: their lowest effort, "low", for latency, as
+    /// for Groq and Cerebras GPT-OSS.
+    private static func mistralDefaultEffort(for modelName: String, aliasTargets: [String]) -> String? {
+        let ids = [modelName] + aliasTargets
+        let alwaysReasons = ids.contains { mistralLargeReasoningModels.contains($0) || mistralGLMReasoningModels.contains($0) }
+        return alwaysReasons ? "low" : nil
     }
 
     // MARK: - Shared
@@ -491,7 +510,7 @@ struct ReasoningConfig {
         case .bedrock:
             return BedrockReasoning.defaultLevel(for: modelInfo.bedrockModel)
         default:
-            return getReasoningParameter(for: provider, modelName: modelName)
+            return getReasoningParameter(for: provider, modelName: modelName, modelInfo: modelInfo)
                 .flatMap(ReasoningLevel.init(effortValue:))
         }
     }
@@ -529,6 +548,8 @@ struct ReasoningConfig {
             }
         case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
             return HostedModelProviders.defaultEffort(for: provider, modelName: modelName)
+        case .mistral:
+            return mistralDefaultEffort(for: modelName, aliasTargets: modelInfo.mistralAliasTargets)
         default:
             return nil
         }

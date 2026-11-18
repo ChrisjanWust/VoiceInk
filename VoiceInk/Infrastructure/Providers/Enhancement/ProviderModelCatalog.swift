@@ -362,20 +362,26 @@ enum ProviderModelCatalog {
         .uniqued()
     }
 
-    // Models that always reason return `message.content` as a list of thinking and text
-    // chunks, whatever `reasoning_effort` says, and LLMkit only reads a plain string. The
-    // `reasoning` capability is also set on hybrid models that answer in plain text by
-    // default, so these are matched by ID. Mistral Large 4 "always reasons" and defaults
-    // to `high`; `mistral-large-latest` points to it. See
-    // https://docs.mistral.ai/inference/conversations/reasoning
+    // Models that always reason. Their thinking-and-text chunk replies are readable now, but
+    // without documented levels Default would run them at their own (high) effort, untested:
+    // there's no Mistral key. So only those with levels in `ReasoningConfig` are offered,
+    // Mistral Large 4 and GLM 5.3, and Default sends their lowest effort. The `reasoning`
+    // capability is also set on hybrid models that answer in plain text by default, so these
+    // are matched by ID. See https://docs.mistral.ai/inference/conversations/reasoning
     private static let mistralAlwaysReasoningTokens = [
         "zai-glm", "magistral", "mistral-large-4", "mistral-large-latest",
     ]
 
+    private static func hasDocumentedMistralLevels(_ id: String) -> Bool {
+        ReasoningConfig.mistralLargeReasoningModels.contains(id) || ReasoningConfig.mistralGLMReasoningModels.contains(id)
+    }
+
     private static func isMistralEnhancementModel(_ model: MistralModel) -> Bool {
         guard let capabilities = model.capabilities, capabilities.completionChat == true else { return false }
         let ids = [model.id, model.name ?? ""].map { $0.lowercased() }
-        if ids.contains(where: { id in mistralAlwaysReasoningTokens.contains(where: { id.contains($0) }) }) {
+        if ids.contains(where: { id in mistralAlwaysReasoningTokens.contains(where: { id.contains($0) }) }),
+            !ids.contains(where: hasDocumentedMistralLevels)
+        {
             return false
         }
         // OCR, moderation, classifier, transcription and speech models can also be

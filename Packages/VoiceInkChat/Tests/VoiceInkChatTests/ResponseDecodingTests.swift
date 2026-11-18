@@ -67,6 +67,28 @@ import Testing
         #expect(result.text == "The meeting is moved to Thursday.")
     }
 
+    /// Mistral Large 4 and GLM 5.3 always reason, so every reply is a chunk list, even at the
+    /// lowest effort. Shaped as Mistral's reasoning docs show it (no Mistral key to record one):
+    /// a thinking chunk with nested text chunks, sometimes more than one, then the answer.
+    @Test func alwaysReasoningMistralModelsKeepOnlyTheAnswer() throws {
+        for model in ["mistral-large-4", "zai-glm-5-3"] {
+            let result = try OpenAICompatibleChatClient.decodeResult(from: data("""
+                {"id": "b2", "object": "chat.completion", "model": "\(model)",
+                 "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant",
+                   "content": [
+                     {"type": "thinking", "thinking": [{"type": "text", "text": "The user says um."},
+                                                      {"type": "text", "text": " Drop fillers."}]},
+                     {"type": "thinking", "thinking": [{"type": "text", "text": "Check the day."}]},
+                     {"type": "text", "text": "The meeting moved "},
+                     {"type": "text", "text": "to Thursday."}]}}],
+                 "usage": {"prompt_tokens": 40, "completion_tokens": 90, "total_tokens": 130}}
+                """))
+            #expect(result.text == "The meeting moved to Thursday.")
+            #expect(result.finishReason == .stop)
+            #expect(!result.text.contains("Drop fillers"))
+        }
+    }
+
     @Test func truncationIsReportedEvenWithNoText() throws {
         let cutOff = try OpenAICompatibleChatClient.decodeResult(from: data("""
             {"choices": [{"message": {"content": "The meeting is moved to"}, "finish_reason": "length"}]}
