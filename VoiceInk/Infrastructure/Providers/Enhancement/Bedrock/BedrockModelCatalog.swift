@@ -38,11 +38,12 @@ enum BedrockModelCatalog {
         "https://bedrock.\(BedrockRegion.normalized(region)).amazonaws.com"
     }
 
-    /// Fetches the usable models, saves their details for the reasoning picker, and returns
-    /// their invocation IDs in display order.
+    /// Fetches the usable models, stages their details for the reasoning picker, and returns
+    /// their invocation IDs in display order. The caller commits the staged details with
+    /// `BedrockModelDetailsStore.commitStaged(region:apiKey:)` once it keeps the list.
     static func fetchModelIDs(apiKey: String, region: String, timeout: TimeInterval = 15) async throws -> [String] {
         let models = try await fetchModels(apiKey: apiKey, region: region, timeout: timeout)
-        BedrockModelDetailsStore.shared.save(models, region: region)
+        BedrockModelDetailsStore.shared.stage(models, region: region, apiKey: apiKey)
         return models.map(\.invocationID)
     }
 
@@ -64,7 +65,8 @@ enum BedrockModelCatalog {
             path: "/inference-profiles",
             query: [
                 URLQueryItem(name: "maxResults", value: "1000"),
-                URLQueryItem(name: "typeEquals", value: "SYSTEM_DEFINED"),
+                // The HTTP name of the SDK's `typeEquals`; AWS ignores `typeEquals` in a query.
+                URLQueryItem(name: "type", value: "SYSTEM_DEFINED"),
             ],
             apiKey: key,
             region: normalizedRegion,
@@ -84,7 +86,10 @@ enum BedrockModelCatalog {
         foundationModels: [FoundationModelSummary],
         profiles: [InferenceProfileSummary]
     ) -> [BedrockModelInfo] {
-        let activeProfiles = profiles.filter { ($0.status ?? "ACTIVE") == "ACTIVE" }
+        // Application profiles belong to someone's cost tracking and are called by ARN.
+        let activeProfiles = profiles.filter {
+            ($0.status ?? "ACTIVE") == "ACTIVE" && ($0.type ?? "SYSTEM_DEFINED") == "SYSTEM_DEFINED"
+        }
 
         let models = foundationModels.compactMap { model -> BedrockModelInfo? in
             guard model.modelLifecycle?.status == "ACTIVE",
@@ -351,6 +356,7 @@ enum BedrockModelCatalog {
 
         let inferenceProfileId: String
         let status: String?
+        let type: String?
         let models: [Model]?
     }
 }
@@ -374,8 +380,28 @@ final class BedrockModelDetailsStore: @unchecked Sendable {
     private var snapshot: Snapshot?
     private var byID: [String: BedrockModelInfo] = [:]
     private var didLoad = false
+    /// Fetched details not yet kept, by Region and key. A fetch can finish after the Region or
+    /// key changed, so its details only replace the saved ones once the caller keeps its list.
+    private var staged: [String: [BedrockModelInfo]] = [:]
 
     private init() {}
+
+    private static func stagingKey(region: String, apiKey: String) -> String {
+        "\(BedrockRegion.normalized(region))\n\(apiKey)"
+    }
+
+    func stage(_ models: [BedrockModelInfo], region: String, apiKey: String) {
+        lock.withLock {
+            staged[Self.stagingKey(region: region, apiKey: apiKey)] = models
+        }
+    }
+
+    /// Saves the details staged by the fetch for this Region and key, if any.
+    func commitStaged(region: String, apiKey: String) {
+        let key = Self.stagingKey(region: region, apiKey: apiKey)
+        guard let models = lock.withLock({ staged.removeValue(forKey: key) }) else { return }
+        save(models, region: region)
+    }
 
     func save(_ models: [BedrockModelInfo], region: String) {
         let snapshot = Snapshot(region: BedrockRegion.normalized(region), models: models)
@@ -406,6 +432,7 @@ final class BedrockModelDetailsStore: @unchecked Sendable {
         lock.withLock {
             snapshot = nil
             byID = [:]
+            staged = [:]
             didLoad = true
             defaults.removeObject(forKey: Self.defaultsKey)
         }

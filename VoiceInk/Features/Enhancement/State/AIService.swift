@@ -956,11 +956,21 @@ class AIService: ObservableObject {
 
             // The key may have been removed or replaced while the request was in flight.
             guard APIKeyManager.shared.getAPIKey(forProvider: provider.rawValue) == apiKey else { return nil }
-            guard provider != .bedrock || BedrockRegion.current == bedrockRegion else { return nil }
+            guard provider != .bedrock || BedrockRegion.current == bedrockRegion else {
+                // The Region changed mid-fetch, and its own fetch was skipped while this one ran.
+                // Fetch again once this call returns and clears the refreshing flag.
+                Task { @MainActor [weak self] in
+                    _ = await self?.fetchLiveModels(for: provider)
+                }
+                return nil
+            }
 
             let models = orderedLiveModels(usableLiveModels(fetched, for: provider), for: provider)
             guard !models.isEmpty else {
                 return ProviderModelCatalog.CatalogError.noUsableModels.localizedDescription
+            }
+            if provider == .bedrock {
+                BedrockModelDetailsStore.shared.commitStaged(region: bedrockRegion, apiKey: apiKey)
             }
             if LiveModelListStore.shared.save(models, forProviderKey: provider.rawValue) {
                 NotificationCenter.default.post(name: .AppSettingsDidChange, object: nil)
