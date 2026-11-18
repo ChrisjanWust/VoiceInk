@@ -96,6 +96,32 @@ struct ReasoningConfig {
         "gpt-5.4-nano",
     ]
 
+    // These OpenAI models reject "none" and reject `temperature: 0.3` even without
+    // `reasoning_effort`, so they always get `temperature: null`.
+    static let openAIEffortRequiredModels: Set<String> = [
+        "gpt-6.2-sol",
+        "gpt-6.2-astra",
+        "gpt-6.1-sol",
+        "gpt-6-astra",
+    ]
+
+    // Non-reasoning models reject `reasoning_effort`.
+    static let openAINonReasoningModelPrefixes = ["gpt-4", "gpt-3.5", "chatgpt-4o"]
+
+    // Verified live on 2026-11-17. No listed model accepts "minimal" or "max".
+    private static func openAILevels(for modelName: String) -> [ReasoningLevel] {
+        if openAINonReasoningModelPrefixes.contains(where: { modelName.hasPrefix($0) }) {
+            return []
+        }
+        if openAINoneReasoningModels.contains(modelName) {
+            return [.off, .low, .medium, .high, .xhigh]
+        }
+        if openAIEffortRequiredModels.contains(modelName) {
+            return [.low, .medium, .high, .xhigh]
+        }
+        return openAICompatibleEffortLevels
+    }
+
     // MARK: - Cerebras
 
     // Cerebras GPT-OSS has no true "none"; use lowest effort.
@@ -193,6 +219,8 @@ struct ReasoningConfig {
         modelInfo: ReasoningModelInfo = ReasoningModelInfo()
     ) -> [ReasoningLevel] {
         switch provider {
+        case .openAI:
+            return openAILevels(for: modelName)
         case .gemini:
             return geminiLevels(for: modelName)
         case .cerebras:
@@ -207,11 +235,9 @@ struct ReasoningConfig {
             return modelInfo.ollamaSupportsThinking == false ? [] : [.enabled]
         case .custom:
             return openAICompatibleEffortLevels
-        case .openAI, .anthropic, .mistral:
-            // Need LLMkit support. OpenAI GPT-5 models reject `temperature` unless
-            // `reasoning_effort` is "none", and OpenAILLMClient always sends it.
-            // Anthropic needs `output_config.effort`; Mistral returns thinking as
-            // chunked `content` that OpenAILLMClient can't decode.
+        case .anthropic, .mistral:
+            // Need LLMkit support: Anthropic `output_config.effort`, and Mistral's
+            // chunked `content` that holds thinking.
             return []
         default:
             // Transcription-only providers, VoiceInk Refine, Local CLI, and any
@@ -302,27 +328,37 @@ struct ReasoningConfig {
         return nil
     }
 
-    // Provider-specific body params for hiding reasoning.
+    // Providers verified live to accept `temperature: null`. OpenAI GPT-5 and GPT-6
+    // models reject any other temperature once reasoning is on, and LLMkit always
+    // sends 0.3, so a picked level replaces it with null. Groq and Mistral keep 0.3.
+    static let nullTemperatureProviders: Set<AIProvider> = [.openAI, .cerebras, .custom]
+
+    // Provider-specific body params: hiding reasoning, and nulling `temperature`.
     static func getExtraBodyParameters(
         for provider: AIProvider,
         modelName: String,
         level: ReasoningLevel? = nil
     ) -> [String: Any]? {
+        let selectedLevel = effectiveLevel(level, for: provider, modelName: modelName)
+        var parameters: [String: Any] = [:]
+
         if provider == .cerebras && cerebrasGPTOSSMinimumReasoningModels.contains(modelName) {
-            return ["reasoning_format": "hidden"]
+            parameters["reasoning_format"] = "hidden"
         } else if provider == .groq && groqGPTOSSMinimumReasoningModels.contains(modelName) {
-            return ["include_reasoning": false]
+            parameters["include_reasoning"] = false
+        } else if provider == .groq, let selectedLevel, selectedLevel != .off {
+            // Groq returns reasoning unless told not to. Only added when the user
+            // turns reasoning on, so Default requests stay unchanged.
+            parameters["include_reasoning"] = false
         }
 
-        // Groq returns reasoning unless told not to. Only added when the user turns
-        // reasoning on, so Default requests stay unchanged.
-        if provider == .groq,
-            let level = effectiveLevel(level, for: provider, modelName: modelName),
-            level != .off
+        if (selectedLevel != nil && nullTemperatureProviders.contains(provider))
+            || (provider == .openAI && openAIEffortRequiredModels.contains(modelName))
         {
-            return ["include_reasoning": false]
+            parameters["temperature"] = NSNull()
         }
-        return nil
+
+        return parameters.isEmpty ? nil : parameters
     }
 
     // MARK: - Ollama

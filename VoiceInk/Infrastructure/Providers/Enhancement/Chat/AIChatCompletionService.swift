@@ -81,11 +81,16 @@ extension AIService {
                 messages: messages,
                 systemPrompt: systemPrompt,
                 temperature: 0.3,
-                reasoningEffort: ReasoningConfig.effectiveLevel(
-                    reasoningLevel,
+                reasoningEffort: ReasoningConfig.getReasoningParameter(
                     for: .custom,
-                    modelName: resolvedModel
-                )?.effortValue,
+                    modelName: resolvedModel,
+                    level: reasoningLevel
+                ),
+                extraBody: ReasoningConfig.getExtraBodyParameters(
+                    for: .custom,
+                    modelName: resolvedModel,
+                    level: reasoningLevel
+                ),
                 timeout: timeout,
                 retryOnTimeout: retryOnTimeout
             )
