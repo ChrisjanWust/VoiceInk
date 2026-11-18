@@ -7,6 +7,8 @@ struct ReasoningModelInfo {
     var openRouterModel: OpenRouterModel? = nil
     /// Whether an Ollama model lists the "thinking" capability. `nil` when unknown.
     var ollamaSupportsThinking: Bool? = nil
+    /// The Bedrock model's live catalog entry, with its reasoning schema. `nil` for custom IDs.
+    var bedrockModel: BedrockModelInfo? = nil
 }
 
 /// Reasoning parameters for enhancement requests.

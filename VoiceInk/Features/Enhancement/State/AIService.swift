@@ -205,6 +205,8 @@ enum AIProvider: String, CaseIterable, Sendable {
         switch self {
         case .gemini, .openAI:
             return true
+        case .bedrock:
+            return true
         default:
             return false
         }
@@ -842,6 +844,8 @@ class AIService: ObservableObject {
             return ReasoningModelInfo(openRouterModel: openRouterModelMetadata(for: model))
         case .ollama:
             return ReasoningModelInfo(ollamaSupportsThinking: ollamaService.thinkingSupport[model])
+        case .bedrock:
+            return ReasoningModelInfo(bedrockModel: BedrockModelDetailsStore.shared.info(forInvocationID: model))
         default:
             return ReasoningModelInfo()
         }
@@ -934,11 +938,17 @@ class AIService: ObservableObject {
         refreshingLiveModelProviders.insert(provider)
         defer { refreshingLiveModelProviders.remove(provider) }
 
+        // Bedrock lists differ per Region, so a fetch for one Region must not serve another.
+        let bedrockRegion = BedrockRegion.current
+        let requestScope = provider == .bedrock ? "\(apiKey)\n\(bedrockRegion)" : apiKey
+
         do {
-            let fetched = try await LiveModelListStore.shared.fetch(forProviderKey: provider.rawValue, apiKey: apiKey) {
+            let fetched = try await LiveModelListStore.shared.fetch(forProviderKey: provider.rawValue, apiKey: requestScope) {
                 switch provider {
                 case .gemini:
                     return try await ProviderModelCatalog.fetchGeminiModelIDs(apiKey: apiKey)
+                case .bedrock:
+                    return try await BedrockModelCatalog.fetchModelIDs(apiKey: apiKey, region: bedrockRegion)
                 default:
                     return try await ProviderModelCatalog.fetchOpenAIModelIDs(apiKey: apiKey)
                 }
@@ -946,6 +956,7 @@ class AIService: ObservableObject {
 
             // The key may have been removed or replaced while the request was in flight.
             guard APIKeyManager.shared.getAPIKey(forProvider: provider.rawValue) == apiKey else { return nil }
+            guard provider != .bedrock || BedrockRegion.current == bedrockRegion else { return nil }
 
             let models = orderedLiveModels(usableLiveModels(fetched, for: provider), for: provider)
             guard !models.isEmpty else {

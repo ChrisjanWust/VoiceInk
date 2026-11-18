@@ -33,11 +33,15 @@ enum BedrockRegion {
             return saved.isEmpty ? defaultRegion : saved
         }
         set {
+            let previous = current
             let value = normalized(newValue)
             if value.isEmpty {
                 UserDefaults.standard.removeObject(forKey: userDefaultsKey)
             } else {
                 UserDefaults.standard.set(value, forKey: userDefaultsKey)
+            }
+            if current != previous {
+                BedrockModelCatalog.regionDidChange()
             }
         }
     }

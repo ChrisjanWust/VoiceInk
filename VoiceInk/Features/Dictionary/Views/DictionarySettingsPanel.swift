@@ -388,6 +388,7 @@ struct DictionarySettingsPanel: View {
         case .ollama: _ = await reviewerAIService.refreshOllamaAvailability()
         case .openRouter: await reviewerAIService.fetchOpenRouterModels()
         case .gemini, .openAI: await reviewerAIService.fetchLiveModels(for: provider)
+        case .bedrock: await reviewerAIService.fetchLiveModels(for: provider)
         default: break
         }
     }

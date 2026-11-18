@@ -328,7 +328,7 @@ struct ProviderDetailPanel: View {
                     ForEach(Array(models.prefix(previewCount).enumerated()), id: \.offset) { index, model in
                         modelRow(
                             title: model,
-                            subtitle: nil,
+                            subtitle: enhancementModelSubtitle(model, for: provider),
                             trailing: nil,
                             systemImage: "sparkles"
                         )
@@ -386,6 +386,12 @@ struct ProviderDetailPanel: View {
             .disabled(isRefreshingOpenRouterModels)
         }
         .padding(.vertical, 8)
+    }
+
+    /// Bedrock IDs such as `global.anthropic.claude-sonnet-5-5` get the catalog's readable name.
+    private func enhancementModelSubtitle(_ model: String, for provider: AIProvider) -> String? {
+        guard provider == .bedrock else { return nil }
+        return BedrockModelDetailsStore.shared.info(forInvocationID: model)?.displayName
     }
 
     private func liveModelListStatus(for provider: AIProvider, modelCount: Int) -> some View {
