@@ -21,6 +21,15 @@ extension AIService {
             for: provider
         )
         let reasoningLevel = EnhancementReasoningSettings.savedLevel(for: provider, model: resolvedModel)
+        if provider == .ollama, reasoningLevel != nil {
+            // Only when a level is saved, so Default requests do no extra work.
+            await loadOllamaThinkingMetadataIfNeeded(for: resolvedModel)
+        }
+        let fastMode = FastModeConfig.parameters(
+            for: provider,
+            modelName: resolvedModel,
+            enabled: EnhancementFastModeSettings.isEnabled(for: provider, model: resolvedModel)
+        )
         let requestTimeout = ReasoningConfig.requestTimeout(
             timeout,
             retryOnTimeout: retryOnTimeout,
@@ -31,6 +40,27 @@ extension AIService {
                 modelInfo: reasoningModelInfo(for: provider, model: resolvedModel)
             )
         )
+
+        if provider == .mistral,
+            let reasoningEffort = ReasoningConfig.mistralReasoningEffort(
+                for: resolvedModel,
+                level: reasoningLevel,
+                modelInfo: reasoningModelInfo(for: provider, model: resolvedModel)
+            )
+        {
+            // Mistral returns reasoning as chunked `content`, which LLMkit can't decode, so a
+            // picked level uses the in-app client. Default stays on the LLMkit path below.
+            var request = MistralChatRequest(model: resolvedModel, messages: messages, systemPrompt: systemPrompt)
+            request.reasoningEffort = reasoningEffort
+            let completion = try await MistralChatClient.chatCompletion(
+                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                request: request,
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
+            )
+            guard !completion.wasTruncated else { throw EnhancementError.outputTruncated }
+            return AIChatCompletionResult(text: completion.text, openRouterCompletion: nil)
+        }
 
         let result: String
         var openRouterCompletion: OpenRouterCompletion? = nil
@@ -47,14 +77,33 @@ extension AIService {
                 retryOnTimeout: requestTimeout.retryOnTimeout
             )
         case .anthropic:
-            result = try await AnthropicLLMClient.chatCompletion(
-                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                model: resolvedModel,
-                messages: messages,
-                systemPrompt: systemPrompt,
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
-            )
+            if let reasoning = ReasoningConfig.anthropicReasoning(for: resolvedModel, level: reasoningLevel) {
+                // LLMkit can't send `thinking` or `output_config`, so a picked level uses the
+                // in-app client. Default stays on LLMkit, unchanged.
+                var request = AnthropicMessagesRequest(
+                    model: resolvedModel,
+                    messages: messages,
+                    systemPrompt: systemPrompt
+                )
+                reasoning.apply(to: &request)
+                let completion = try await AnthropicMessagesClient.createMessage(
+                    apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                    request: request,
+                    timeout: requestTimeout.seconds,
+                    retryOnTimeout: requestTimeout.retryOnTimeout
+                )
+                guard !completion.wasTruncated else { throw EnhancementError.outputTruncated }
+                result = completion.text
+            } else {
+                result = try await AnthropicLLMClient.chatCompletion(
+                    apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                    model: resolvedModel,
+                    messages: messages,
+                    systemPrompt: systemPrompt,
+                    timeout: requestTimeout.seconds,
+                    retryOnTimeout: requestTimeout.retryOnTimeout
+                )
+            }
         case .openRouter:
             let policy = OpenRouterRequestPolicy.lowLatency(
                 modelName: resolvedModel,
@@ -147,10 +196,13 @@ extension AIService {
                 modelName: resolvedModel,
                 level: reasoningLevel
             )
-            let extraBody = ReasoningConfig.getExtraBodyParameters(
-                for: provider,
-                modelName: resolvedModel,
-                level: reasoningLevel
+            let extraBody = FastModeConfig.merging(
+                fastMode,
+                into: ReasoningConfig.getExtraBodyParameters(
+                    for: provider,
+                    modelName: resolvedModel,
+                    level: reasoningLevel
+                )
             )
             result = try await OpenAILLMClient.chatCompletion(
                 baseURL: baseURL,

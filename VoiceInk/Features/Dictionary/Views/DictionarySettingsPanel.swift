@@ -352,6 +352,7 @@ struct DictionarySettingsPanel: View {
                     savedCustomModelID: reviewerModel, draftModel: $reviewerModel)
                 SavedEnhancementReasoningPicker(provider: provider, modelName: reviewerModel,
                     modelInfo: reviewerAIService.reasoningModelInfo(for: provider, model: reviewerModel))
+                SavedEnhancementFastModeToggle(provider: provider, modelName: reviewerModel)
             }
             if !reviewProviders.contains(provider) {
                 Text("Connect this provider in AI Models to resume Auto-Learn review.")
@@ -387,8 +388,8 @@ struct DictionarySettingsPanel: View {
         switch provider {
         case .ollama: _ = await reviewerAIService.refreshOllamaAvailability()
         case .openRouter: await reviewerAIService.fetchOpenRouterModels()
-        case .gemini, .openAI: await reviewerAIService.fetchLiveModels(for: provider)
-        default: break
+        default:
+            if provider.fetchesLiveModelList { await reviewerAIService.fetchLiveModels(for: provider) }
         }
     }
 
