@@ -2,7 +2,7 @@
 
 VoiceInk's own chat library: text in, text out, for AI enhancement, the Assistant and Auto-Learn. It will replace LLMkit's chat clients. LLMkit stays for speech-to-text.
 
-It depends on Foundation only, and the app doesn't link it yet.
+It depends on Foundation only. The app links its library product.
 
 ## What's in it
 
@@ -13,7 +13,7 @@ It depends on Foundation only, and the app doesn't link it yet.
 | `ChatError.swift` | `ChatError`, which mirrors `LLMKitError`, and provider error-body parsing |
 | `OpenAICompatibleChatClient.swift` | OpenAI, Groq, Cerebras, Mistral, Together AI, GMI Cloud, Baseten, Fireworks AI, Vercel AI Gateway, Custom |
 | `AnthropicChatClient.swift` | Anthropic Messages |
-| `GeminiChatClient.swift` | Gemini Interactions; `GeminiAPIVersion.forModel` picks v1 or v1beta from the v1 model list |
+| `GeminiChatClient.swift` | Gemini Interactions; `GeminiAPIVersion.forModel` picks v1 or v1beta from the model ID |
 | `OpenRouterChatClient.swift` | OpenRouter, with `reasoning` and the low-latency `provider` routing preferences |
 | `OllamaChatClient.swift` | Ollama native `/api/chat`; `think` as a Bool or a level |
 | `BedrockChatClient.swift` | Bedrock Converse with a bearer API key and `additionalModelRequestFields` |
@@ -37,7 +37,7 @@ guard result.finishReason == .stop else { /* cut off, filtered or failed: don't 
 
 - `result.text` is the final answer only. Thinking blocks, `reasoning_content`, Mistral `thinking` chunks and `<think>` sections never reach it.
 - Check `result.finishReason`, not just `isTruncated`: only `.stop` is a complete answer.
-- `extraBody` is merged last, so it can add or override any field, such as Fast mode's `service_tier`, `speed` or `performanceConfig`. `.null` sends an explicit `null`.
+- `extraBody` is merged last, so it can add or override any field, such as Fast mode's `service_tier` or Bedrock's `performanceConfig`. `.null` sends an explicit `null`.
 - `extraHeaders` can add a header such as a beta flag, but never replaces the API key.
 - A reasoning setting a provider's API can't express throws `ChatError.unsupported` before anything is sent. The table on `ChatRequest.Reasoning` shows each provider's mapping. Bedrock takes reasoning per model in `additionalModelRequestFields`.
 

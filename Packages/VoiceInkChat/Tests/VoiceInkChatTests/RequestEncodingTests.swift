@@ -172,7 +172,7 @@ import Testing
         chat.model = "claude-opus-5-5"
         chat.maxTokens = 32_000
         chat.reasoning = .effort("xhigh")
-        // Fast mode's Anthropic field, as FastModeConfig sends it.
+        // A top-level extra field, such as Anthropic's fast-mode `speed`.
         chat.extraBody = ["speed": "fast"]
         try expectBody(try AnthropicChatClient(apiKey: "k").makeURLRequest(chat), """
             {"model": "claude-opus-5-5", "max_tokens": 32000, "speed": "fast",
@@ -225,7 +225,7 @@ import Testing
         chat.model = "gemini-4-hydrogen"
         chat.reasoning = .effort("xhigh")
         chat.maxTokens = 2000
-        // Fast mode's Gemini field, as FastModeConfig sends it.
+        // A top-level extra field, such as Gemini's `service_tier`.
         chat.extraBody = ["service_tier": "priority"]
         let body = try GeminiChatClient(apiKey: "k", apiVersion: .v1).body(for: chat)
         #expect(body["service_tier"] == "priority")
@@ -244,12 +244,12 @@ import Testing
         #expect(throws: ChatError.self) { try GeminiChatClient(apiKey: "k", apiVersion: .v1).body(for: empty) }
     }
 
-    @Test func geminiVersionFromTheV1ModelList() {
-        let v1: Set<String> = ["gemini-3.6-flash", "gemini-4-argon"]
-        #expect(GeminiAPIVersion.forModel("gemini-3.6-flash", v1Models: v1) == .v1)
-        // Not on v1's list, with or without "-preview" in the name.
-        #expect(GeminiAPIVersion.forModel("gemini-flash-latest", v1Models: v1) == .v1beta)
-        #expect(GeminiAPIVersion.forModel("gemini-3.1-pro-preview", v1Models: v1) == .v1beta)
+    @Test func geminiVersionFromTheModelID() {
+        #expect(GeminiAPIVersion.forModel("gemini-3.6-flash") == .v1)
+        #expect(GeminiAPIVersion.forModel("gemini-4-argon") == .v1)
+        // v1beta-only: previews and the moving `-latest` aliases.
+        #expect(GeminiAPIVersion.forModel("gemini-3.1-pro-preview") == .v1beta)
+        #expect(GeminiAPIVersion.forModel("gemini-flash-latest") == .v1beta)
     }
 
     // MARK: OpenRouter

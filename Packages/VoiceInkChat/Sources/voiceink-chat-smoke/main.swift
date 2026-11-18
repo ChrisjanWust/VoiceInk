@@ -150,8 +150,7 @@ if let key = env("ANTHROPIC_API_KEY") {
     )
 }
 if let key = env("GEMINI_API_KEY") {
-    // The app picks the version with GeminiAPIVersion.forModel and its v1 model list; these
-    // are the versions that list serves today.
+    // GeminiAPIVersion.forModel picks v1 for these models.
     let model = env("SMOKE_GEMINI_MODEL") ?? "gemini-3.6-flash"
     let v1 = GeminiChatClient(apiKey: key, apiVersion: .v1)
     cases += pair(

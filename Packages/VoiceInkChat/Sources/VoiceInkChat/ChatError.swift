@@ -12,8 +12,10 @@ public enum ChatError: Error, LocalizedError, Sendable, Equatable {
     /// The request asks for something this provider's API can't express, such as
     /// `.disabled` reasoning on Gemini. Nothing was sent.
     case unsupported(String)
-    /// No HTTP response: DNS, TLS, connection reset, offline.
-    case networkError(String)
+    /// No HTTP response: DNS, TLS, connection reset, offline. `code` is the `URLError` code when
+    /// there was one, so the app can tell an unknown host (such as a Region without Bedrock) from
+    /// a dropped connection.
+    case networkError(String, code: URLError.Code?)
     /// A non-2xx response after any retries.
     /// - `message`: the provider's error message when the body has one, otherwise the body.
     /// - `errorType`: the provider's error type or code, such as `invalid_request_error`,
@@ -34,7 +36,7 @@ public enum ChatError: Error, LocalizedError, Sendable, Equatable {
             return "Invalid URL: \(url)"
         case .unsupported(let detail):
             return "Unsupported request: \(detail)"
-        case .networkError(let detail):
+        case .networkError(let detail, _):
             return "Network error: \(detail)"
         case .httpError(let statusCode, let message, _):
             return "HTTP \(statusCode): \(message)"
