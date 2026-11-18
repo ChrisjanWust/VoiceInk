@@ -150,31 +150,42 @@ if let key = env("ANTHROPIC_API_KEY") {
     )
 }
 if let key = env("GEMINI_API_KEY") {
+    // The app picks the version with GeminiAPIVersion.forModel and its v1 model list; these
+    // are the versions that list serves today.
     let model = env("SMOKE_GEMINI_MODEL") ?? "gemini-3.6-flash"
-    let client = GeminiChatClient(apiKey: key, apiVersion: .v1)
+    let v1 = GeminiChatClient(apiKey: key, apiVersion: .v1)
     cases += pair(
-        "gemini", client, model: model,
+        "gemini", v1, model: model,
         defaultRequest: request(model, reasoning: .effort("minimal")),
         levelLabel: "thinking low",
         levelRequest: request(model, reasoning: .effort("low"), timeout: 90)
     )
     // xhigh, which LLMkit's closed enum can't send.
     cases.append(Case(
-        provider: "gemini", model: "gemini-4-hydrogen", label: "thinking xhigh", client: client,
+        provider: "gemini", model: "gemini-4-hydrogen", label: "thinking xhigh", client: v1,
         request: request("gemini-4-hydrogen", reasoning: .effort("xhigh"), timeout: 120)))
-    // A v1beta-only alias, with the version left to the client: v1 404s, then v1beta answers.
+    // A v1beta-only alias, which LLMkit's "-preview" rule sends to v1, where it 404s.
     cases.append(Case(
-        provider: "gemini", model: "gemini-flash-latest", label: "Default, auto version",
-        client: GeminiChatClient(apiKey: key), request: request("gemini-flash-latest")))
+        provider: "gemini", model: "gemini-flash-latest", label: "Default on v1beta",
+        client: GeminiChatClient(apiKey: key, apiVersion: .v1beta), request: request("gemini-flash-latest")))
 }
+
+/// OpenRouter with VoiceInk's low-latency routing preferences.
+struct RoutedOpenRouter: ChatClient {
+    let client: OpenRouterChatClient
+    func complete(_ request: ChatRequest) async throws -> ChatResult {
+        try await client.complete(
+            request,
+            providerPreferences: .init(
+                sort: .throughput, preferredMaxLatencyP90: 2.5, requireParameters: true, allowFallbacks: true)
+        )
+    }
+}
+
 if let key = env("OPENROUTER_API_KEY") {
     let model = env("SMOKE_OPENROUTER_MODEL") ?? "openai/gpt-oss-120b"
-    let client = OpenRouterChatClient(
-        apiKey: key,
-        appReferer: URL(string: "https://tryvoiceink.com"),
-        appTitle: "VoiceInk",
-        defaultOptions: .init(provider: .init(sort: .throughput, requireParameters: true, allowFallbacks: true))
-    )
+    let client = RoutedOpenRouter(client: OpenRouterChatClient(
+        apiKey: key, appReferer: URL(string: "https://tryvoiceink.com"), appTitle: "VoiceInk"))
     cases += pair(
         "openrouter", client, model: model,
         defaultRequest: request(model, reasoning: .effort("low")),
@@ -182,25 +193,36 @@ if let key = env("OPENROUTER_API_KEY") {
         levelRequest: request(model, reasoning: .effort("medium"), timeout: 90)
     )
 }
+
+/// Bedrock with model-specific fields in additionalModelRequestFields.
+struct BedrockWithFields: ChatClient {
+    let client: BedrockChatClient
+    let fields: [String: JSONValue]
+    func complete(_ request: ChatRequest) async throws -> ChatResult {
+        try await client.complete(request, additionalModelRequestFields: fields)
+    }
+}
+
 if let key = env("AWS_BEARER_TOKEN_BEDROCK") {
     let region = env("AWS_REGION", "AWS_DEFAULT_REGION") ?? "us-east-1"
     let client = BedrockChatClient(apiKey: key, region: region)
-    let models = env("SMOKE_BEDROCK_MODEL").map { [$0] } ?? [
-        "global.amazon.nova-2-lite-v1:0",
-        "global.anthropic.claude-sonnet-5-5",
-        "openai.gpt-oss-120b-1:0",
+    // Each model's low-effort reasoning fields. Nova and Claude reject unknown fields, so a pass
+    // there shows the field was read; gpt-oss ignores unknown fields.
+    let models: [(String, [String: JSONValue])] = [
+        ("global.amazon.nova-2-lite-v1:0", ["reasoningConfig": ["type": "enabled", "maxReasoningEffort": "low"]]),
+        ("global.anthropic.claude-sonnet-5-5",
+         ["thinking": ["type": "adaptive", "display": "omitted"], "output_config": ["effort": "low"]]),
+        ("openai.gpt-oss-120b-1:0", ["reasoning_effort": "low"]),
     ]
-    for model in models {
-        cases += pair(
-            "bedrock", client, model: model,
-            defaultRequest: request(model),
-            levelLabel: "effort low",
-            levelRequest: request(model, reasoning: .effort("low"), timeout: 90)
-        )
+    for (model, fields) in models {
+        cases.append(Case(provider: "bedrock", model: model, label: "Default", client: client, request: request(model)))
+        cases.append(Case(
+            provider: "bedrock", model: model, label: "effort low",
+            client: BedrockWithFields(client: client, fields: fields), request: request(model, timeout: 90)))
     }
 }
 if let model = env("OLLAMA_MODEL") {
-    let baseURL = env("OLLAMA_BASE_URL").flatMap(URL.init(string:)) ?? OllamaChatClient.defaultBaseURL
+    let baseURL = env("OLLAMA_BASE_URL").flatMap(URL.init(string:)) ?? URL(string: "http://localhost:11434")!
     let client = OllamaChatClient(baseURL: baseURL)
     cases += pair(
         "ollama", client, model: model,

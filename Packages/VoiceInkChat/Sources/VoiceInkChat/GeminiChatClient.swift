@@ -4,24 +4,24 @@
 // - Sources/GoogleProvider/GoogleInteractionsPrompt.swift (input steps)
 // - Sources/GoogleProvider/GoogleInteractionsResponse.swift (steps, status, usage)
 // Modified for VoiceInkChat: text-only, no tools, agents, background polling or streaming,
-// `store: false` by default as in LLMkit, LLMkit's final-text rule, and v1/v1beta selection.
+// `store: false` as in LLMkit, LLMkit's final-text rule, and v1/v1beta selection.
 
 import Foundation
 
 /// The Gemini API version an Interactions request goes to.
-public enum GeminiAPIVersion: String, Sendable, Equatable, CaseIterable {
+public enum GeminiAPIVersion: String, Sendable {
     /// The stable API, for generally available models.
     case v1
     /// The beta API. Preview models, and some aliases such as `-latest`, are only served here.
     case v1beta
 
-    /// The version to use for a model, from the model lists each version serves
-    /// (`GET /{version}/models`): v1 when it lists the model, otherwise v1beta.
+    /// The version for a model, from the models list v1 serves (`GET /v1/models`, with the
+    /// `models/` prefix removed): v1 when it lists the model, otherwise v1beta.
     ///
     /// This replaces LLMkit's rule (a `-preview` substring means v1beta), which sends
     /// v1beta-only models such as the `-latest` aliases to v1, where they 404.
     public static func forModel(_ model: String, v1Models: Set<String>) -> GeminiAPIVersion {
-        v1Models.contains(GeminiChatClient.bareModelID(model)) ? .v1 : .v1beta
+        v1Models.contains(model) ? .v1 : .v1beta
     }
 }
 
@@ -32,54 +32,22 @@ public enum GeminiAPIVersion: String, Sendable, Equatable, CaseIterable {
 ///
 /// Reasoning: `.effort(e)` sets `generation_config.thinking_level` to `e` as written, so any
 /// level the API accepts can be sent, including `"xhigh"`. Gemini 3 models can't turn thinking
-/// off and have no token budget, so `.disabled`, `.enabled` and `.budget` throw
-/// ``ChatError/unsupported(_:)``. Use `.effort("minimal")` (or `"low"` where minimal isn't
-/// supported) for the least thinking.
-///
-/// Endpoint: pass `apiVersion` when the caller knows it from the model lists (see
-/// ``GeminiAPIVersion/forModel(_:v1Models:)``). With `nil`, the client tries v1 and, if v1 answers
-/// 404, retries on v1beta and remembers that for the model for the rest of the process.
+/// off, so `.disabled` and `.enabled` throw ``ChatError/unsupported(_:)``. Use
+/// `.effort("minimal")` (or `"low"` where minimal isn't supported) for the least thinking.
 public struct GeminiChatClient: ChatClient {
-    public static let baseURL = URL(string: "https://generativelanguage.googleapis.com")!
-
     public var apiKey: String
-    public var apiVersion: GeminiAPIVersion?
-    /// Whether Google keeps the interaction. LLMkit and VoiceInk send `false`.
-    public var store: Bool
-    public var baseURL: URL
-    public var http: ChatHTTP
+    /// Pick it with ``GeminiAPIVersion/forModel(_:v1Models:)``.
+    public var apiVersion: GeminiAPIVersion
+    var baseURL = URL(string: "https://generativelanguage.googleapis.com")!
+    var http = ChatHTTP.shared
 
-    public init(
-        apiKey: String,
-        apiVersion: GeminiAPIVersion? = nil,
-        store: Bool = false,
-        baseURL: URL = GeminiChatClient.baseURL,
-        http: ChatHTTP = .shared
-    ) {
+    public init(apiKey: String, apiVersion: GeminiAPIVersion) {
         self.apiKey = apiKey
         self.apiVersion = apiVersion
-        self.store = store
-        self.baseURL = baseURL
-        self.http = http
     }
 
     public func complete(_ request: ChatRequest) async throws -> ChatResult {
-        let model = Self.bareModelID(request.model)
-        if let apiVersion {
-            return try await complete(request, version: apiVersion)
-        }
-        if let remembered = await GeminiVersionMemory.shared.version(for: model) {
-            return try await complete(request, version: remembered)
-        }
-        do {
-            let result = try await complete(request, version: .v1)
-            await GeminiVersionMemory.shared.remember(.v1, for: model)
-            return result
-        } catch ChatError.httpError(statusCode: 404, _, _) {
-            let result = try await complete(request, version: .v1beta)
-            await GeminiVersionMemory.shared.remember(.v1beta, for: model)
-            return result
-        }
+        try await complete(request, version: apiVersion)
     }
 
     private func complete(_ request: ChatRequest, version: GeminiAPIVersion) async throws -> ChatResult {
@@ -88,18 +56,18 @@ public struct GeminiChatClient: ChatClient {
         return try Self.decodeResult(from: data)
     }
 
-    public func endpoint(for version: GeminiAPIVersion) -> URL {
+    func endpoint(for version: GeminiAPIVersion) -> URL {
         baseURL.appendingPathComponent(version.rawValue).appendingPathComponent("interactions")
     }
 
-    public func makeURLRequest(_ request: ChatRequest, version: GeminiAPIVersion) throws -> URLRequest {
+    func makeURLRequest(_ request: ChatRequest, version: GeminiAPIVersion) throws -> URLRequest {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw ChatError.missingAPIKey }
         let headers = ChatHTTP.mergedHeaders(request.extraHeaders, ["x-goog-api-key": key])
         return try ChatHTTP.jsonRequest(url: endpoint(for: version), body: try body(for: request), headers: headers)
     }
 
-    public func body(for request: ChatRequest) throws -> [String: JSONValue] {
+    func body(for request: ChatRequest) throws -> [String: JSONValue] {
         // LLMkit's input rules: blank messages are dropped, there must be a turn left, and the
         // last one can't be the model's (Gemini doesn't continue a prefilled answer).
         let turns = request.conversation.filter {
@@ -113,7 +81,7 @@ public struct GeminiChatClient: ChatClient {
         }
 
         var body: [String: JSONValue] = [
-            "model": .string(Self.bareModelID(request.model)),
+            "model": .string(request.model),
             "input": .array(
                 turns.map { turn in
                     [
@@ -122,12 +90,12 @@ public struct GeminiChatClient: ChatClient {
                     ]
                 }
             ),
-            "store": .bool(store),
+            // Stateless, as in LLMkit and VoiceInk: Google doesn't keep the interaction.
+            "store": false,
         ]
         if let system = request.resolvedSystem?.trimmingCharacters(in: .whitespacesAndNewlines), !system.isEmpty {
             body["system_instruction"] = .string(system)
         }
-        if let serviceTier = request.serviceTier { body["service_tier"] = .string(serviceTier) }
 
         var generation: [String: JSONValue] = [:]
         if let temperature = request.temperature { generation["temperature"] = .number(temperature) }
@@ -142,20 +110,12 @@ public struct GeminiChatClient: ChatClient {
                 "Gemini can't turn thinking off. Use .effort(\"minimal\") or the lowest level the model takes.")
         case .enabled:
             throw ChatError.unsupported("Gemini takes a thinking level. Use .effort(_:), or nil for the default.")
-        case .budget:
-            throw ChatError.unsupported("The Gemini Interactions API takes a thinking level, not a token budget.")
         }
         if !generation.isEmpty { body["generation_config"] = .object(generation) }
         return body.merging(extra: request.extraBody)
     }
 
-    /// Accepts `models/gemini-…` as well as `gemini-…`, since the models endpoint lists names
-    /// with the prefix.
-    static func bareModelID(_ model: String) -> String {
-        model.hasPrefix("models/") ? String(model.dropFirst("models/".count)) : model
-    }
-
-    public static func decodeResult(from data: Data) throws -> ChatResult {
+    static func decodeResult(from data: Data) throws -> ChatResult {
         let response = try ChatHTTP.decode(ResponseBody.self, from: data)
         return try ChatResult.make(
             text: finalText(of: response.steps ?? []),
@@ -167,8 +127,7 @@ public struct GeminiChatClient: ChatClient {
                     outputTokens: $0["total_output_tokens"]?.intValue,
                     reasoningTokens: $0["total_thought_tokens"]?.intValue
                 )
-            },
-            model: response.model
+            }
         )
     }
 
@@ -212,18 +171,7 @@ public struct GeminiChatClient: ChatClient {
         }
 
         let status: String?
-        let model: String?
         let steps: [Step]?
         let usage: JSONValue?
     }
-}
-
-/// Which API version served each model, for clients with no explicit version.
-actor GeminiVersionMemory {
-    static let shared = GeminiVersionMemory()
-    private var versions: [String: GeminiAPIVersion] = [:]
-
-    func version(for model: String) -> GeminiAPIVersion? { versions[model] }
-    func remember(_ version: GeminiAPIVersion, for model: String) { versions[model] = version }
-    func reset() { versions = [:] }
 }

@@ -3,8 +3,8 @@ import Foundation
 /// A client that turns one chat request into one final answer.
 ///
 /// Every provider client in this package conforms. Clients are value types that hold their
-/// configuration (API key, endpoint) and a ``ChatHTTP`` transport, so they're cheap to create
-/// per request.
+/// configuration (API key, endpoint) and share one transport, so they're cheap to create per
+/// request.
 public protocol ChatClient: Sendable {
     func complete(_ request: ChatRequest) async throws -> ChatResult
 }
@@ -34,14 +34,16 @@ public struct ChatRequest: Sendable, Equatable {
     /// How much the model should reason. Each client maps it to its provider's field, and throws
     /// ``ChatError/unsupported(_:)`` for a setting its API has no way to express.
     ///
-    /// | Case | OpenAI-compatible | Anthropic | Gemini | OpenRouter | Ollama | Bedrock |
-    /// |---|---|---|---|---|---|---|
-    /// | `.effort(e)` | `reasoning_effort` | adaptive thinking + `output_config.effort` | `thinking_level` | `reasoning.effort` | `think: e` | per model family |
-    /// | `.disabled` | `reasoning_effort: "none"` | `thinking.type: disabled` | unsupported | `reasoning.enabled: false` | `think: false` | per model family |
-    /// | `.enabled` | unsupported | adaptive thinking | unsupported | `reasoning.enabled: true` | `think: true` | per model family |
-    /// | `.budget(n)` | unsupported | `thinking.budget_tokens` | unsupported | `reasoning.max_tokens` | unsupported | Anthropic models only |
+    /// | Case | OpenAI-compatible | Anthropic | Gemini | OpenRouter | Ollama |
+    /// |---|---|---|---|---|---|
+    /// | `.effort(e)` | `reasoning_effort` | adaptive thinking + `output_config.effort` | `thinking_level` | `reasoning.effort` | `think: e` |
+    /// | `.disabled` | `reasoning_effort: "none"` | `thinking.type: disabled` | unsupported | `reasoning.enabled: false` | `think: false` |
+    /// | `.enabled` | unsupported | adaptive thinking | unsupported | `reasoning.enabled: true` | `think: true` |
     ///
-    /// Leave it `nil` to send no reasoning field at all.
+    /// The app picks what each model takes. OpenRouter always adds `exclude: true`, so reasoning
+    /// text isn't returned. Anything else, such as an Anthropic token budget or `between_tools`,
+    /// goes in ``extraBody``. Bedrock takes reasoning per model in `additionalModelRequestFields`,
+    /// so it throws for every case. Leave it `nil` to send no reasoning field at all.
     public enum Reasoning: Sendable, Equatable {
         /// A named level, passed through as written: `"none"`, `"minimal"`, `"low"`, `"medium"`,
         /// `"high"`, `"xhigh"`, `"max"`, or whatever else the model accepts.
@@ -50,8 +52,6 @@ public struct ChatRequest: Sendable, Equatable {
         case disabled
         /// Turn reasoning on at the provider's default amount.
         case enabled
-        /// A thinking budget in tokens.
-        case budget(tokens: Int)
     }
 
     public var model: String
@@ -60,16 +60,15 @@ public struct ChatRequest: Sendable, Equatable {
     /// providers get it as a leading system message.
     public var system: String?
     public var messages: [Message]
-    /// The most answer tokens to generate. `nil` sends the provider's own default, except
-    /// Anthropic, which requires the field and gets 8192.
+    /// The most tokens to generate, including any thinking. `nil` sends the provider's own
+    /// default, except Anthropic, which requires the field and gets 8192.
     public var maxTokens: Int?
     /// Sampling temperature. `nil` leaves the field out of the request entirely.
     public var temperature: Double?
     public var reasoning: Reasoning?
-    /// A provider service tier, such as `"priority"` or `"flex"`, passed through as written.
-    public var serviceTier: String?
-    /// Top-level body fields added last, so they override anything the client set.
-    /// `.null` sends an explicit `null`.
+    /// Top-level body fields added last, so they override anything the client set. This is
+    /// where Fast mode's fields go, such as `service_tier` or `speed`. `.null` sends an explicit
+    /// `null`.
     public var extraBody: [String: JSONValue]
     /// Headers added on top of the client's own, such as a beta header. Authentication headers
     /// (`Authorization`, `x-api-key`, `anthropic-version`, `x-goog-api-key`) always come from the
@@ -88,7 +87,6 @@ public struct ChatRequest: Sendable, Equatable {
         maxTokens: Int? = nil,
         temperature: Double? = nil,
         reasoning: Reasoning? = nil,
-        serviceTier: String? = nil,
         extraBody: [String: JSONValue] = [:],
         extraHeaders: [String: String] = [:],
         timeout: TimeInterval = 30,
@@ -100,7 +98,6 @@ public struct ChatRequest: Sendable, Equatable {
         self.maxTokens = maxTokens
         self.temperature = temperature
         self.reasoning = reasoning
-        self.serviceTier = serviceTier
         self.extraBody = extraBody
         self.extraHeaders = extraHeaders
         self.timeout = timeout
@@ -145,7 +142,7 @@ public struct ChatUsage: Sendable, Equatable {
     /// Reasoning tokens, when the provider reports them separately.
     public var reasoningTokens: Int?
 
-    public init(inputTokens: Int? = nil, outputTokens: Int? = nil, reasoningTokens: Int? = nil) {
+    init(inputTokens: Int? = nil, outputTokens: Int? = nil, reasoningTokens: Int? = nil) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.reasoningTokens = reasoningTokens
@@ -155,6 +152,10 @@ public struct ChatUsage: Sendable, Equatable {
 }
 
 /// The model's final answer.
+///
+/// Check ``finishReason`` before using ``text``: only `.stop` means a complete answer. Text with
+/// `.length` is cut off, text with `.contentFilter` may be a guardrail's replacement, and
+/// `.error`, `.toolCalls` or `.other` can come with a partial answer.
 public struct ChatResult: Sendable, Equatable {
     /// The answer, trimmed of surrounding whitespace. Never contains reasoning: thinking blocks,
     /// `reasoning_content`, reasoning chunks and `<think>` sections are all left out.
@@ -163,19 +164,16 @@ public struct ChatResult: Sendable, Equatable {
     /// The provider's own finish value, such as `"max_tokens"` or `"incomplete"`.
     public var rawFinishReason: String?
     public var usage: ChatUsage?
-    /// The model that answered, when the provider says (OpenRouter, OpenAI-compatible).
-    public var model: String?
     /// The upstream provider that served the request (OpenRouter).
     public var provider: String?
     /// Provider metadata passed through as JSON, such as OpenRouter's `openrouter_metadata`.
     public var metadata: JSONValue?
 
-    public init(
+    init(
         text: String,
         finishReason: FinishReason,
         rawFinishReason: String? = nil,
         usage: ChatUsage? = nil,
-        model: String? = nil,
         provider: String? = nil,
         metadata: JSONValue? = nil
     ) {
@@ -183,7 +181,6 @@ public struct ChatResult: Sendable, Equatable {
         self.finishReason = finishReason
         self.rawFinishReason = rawFinishReason
         self.usage = usage
-        self.model = model
         self.provider = provider
         self.metadata = metadata
     }
@@ -199,7 +196,6 @@ public struct ChatResult: Sendable, Equatable {
         finishReason: FinishReason,
         rawFinishReason: String?,
         usage: ChatUsage?,
-        model: String? = nil,
         provider: String? = nil,
         metadata: JSONValue? = nil
     ) throws -> ChatResult {
@@ -212,7 +208,6 @@ public struct ChatResult: Sendable, Equatable {
             finishReason: finishReason,
             rawFinishReason: rawFinishReason,
             usage: usage.flatMap { $0.isEmpty ? nil : $0 },
-            model: model,
             provider: provider,
             metadata: metadata
         )

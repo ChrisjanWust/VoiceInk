@@ -12,27 +12,13 @@ import Foundation
 /// An OpenAI Chat Completions endpoint, with the differences between providers that share
 /// the format.
 public struct OpenAICompatibleProvider: Sendable, Equatable {
-    /// A short name for logs and errors.
-    public var name: String
+    /// A short name for errors.
+    let name: String
     /// The full chat completions URL, such as `https://api.openai.com/v1/chat/completions`.
-    public var endpoint: URL
+    let endpoint: URL
     /// The body field for ``ChatRequest/maxTokens``. OpenAI deprecated `max_tokens` and its
     /// reasoning models reject it, so OpenAI, Groq and Cerebras use `max_completion_tokens`.
-    public var maxTokensField: String
-    /// Headers every request to this provider gets.
-    public var headers: [String: String]
-
-    public init(
-        name: String,
-        endpoint: URL,
-        maxTokensField: String = "max_tokens",
-        headers: [String: String] = [:]
-    ) {
-        self.name = name
-        self.endpoint = endpoint
-        self.maxTokensField = maxTokensField
-        self.headers = headers
-    }
+    let maxTokensField: String
 
     private static func preset(_ name: String, _ endpoint: String, maxTokensField: String = "max_tokens")
         -> OpenAICompatibleProvider
@@ -55,8 +41,8 @@ public struct OpenAICompatibleProvider: Sendable, Equatable {
 
     /// A user-configured endpoint. `endpoint` is the full chat completions URL, as VoiceInk's
     /// custom provider settings store it.
-    public static func custom(endpoint: URL, name: String = "Custom") -> OpenAICompatibleProvider {
-        OpenAICompatibleProvider(name: name, endpoint: endpoint)
+    public static func custom(endpoint: URL) -> OpenAICompatibleProvider {
+        OpenAICompatibleProvider(name: "Custom", endpoint: endpoint, maxTokensField: "max_tokens")
     }
 }
 
@@ -73,12 +59,11 @@ public struct OpenAICompatibleProvider: Sendable, Equatable {
 public struct OpenAICompatibleChatClient: ChatClient {
     public var apiKey: String
     public var provider: OpenAICompatibleProvider
-    public var http: ChatHTTP
+    var http = ChatHTTP.shared
 
-    public init(apiKey: String, provider: OpenAICompatibleProvider, http: ChatHTTP = .shared) {
+    public init(apiKey: String, provider: OpenAICompatibleProvider) {
         self.apiKey = apiKey
         self.provider = provider
-        self.http = http
     }
 
     public func complete(_ request: ChatRequest) async throws -> ChatResult {
@@ -91,16 +76,15 @@ public struct OpenAICompatibleChatClient: ChatClient {
         return try Self.decodeResult(from: data)
     }
 
-    public func makeURLRequest(_ request: ChatRequest) throws -> URLRequest {
+    func makeURLRequest(_ request: ChatRequest) throws -> URLRequest {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw ChatError.missingAPIKey }
-        let headers = ChatHTTP.mergedHeaders(
-            provider.headers, request.extraHeaders, ["Authorization": "Bearer \(key)"])
+        let headers = ChatHTTP.mergedHeaders(request.extraHeaders, ["Authorization": "Bearer \(key)"])
         return try ChatHTTP.jsonRequest(url: provider.endpoint, body: try body(for: request), headers: headers)
     }
 
     /// The request body. `extraBody` is applied last, so it can override or `null` any field.
-    public func body(for request: ChatRequest) throws -> [String: JSONValue] {
+    func body(for request: ChatRequest) throws -> [String: JSONValue] {
         var body: [String: JSONValue] = [
             "model": .string(request.model),
             "messages": .array(Self.messages(for: request)),
@@ -108,7 +92,6 @@ public struct OpenAICompatibleChatClient: ChatClient {
         ]
         if let temperature = request.temperature { body["temperature"] = .number(temperature) }
         if let maxTokens = request.maxTokens { body[provider.maxTokensField] = .number(Double(maxTokens)) }
-        if let serviceTier = request.serviceTier { body["service_tier"] = .string(serviceTier) }
         switch request.reasoning {
         case nil:
             break
@@ -119,8 +102,6 @@ public struct OpenAICompatibleChatClient: ChatClient {
         case .enabled:
             throw ChatError.unsupported(
                 "\(provider.name) takes a reasoning effort, not an on/off switch. Use .effort(_:).")
-        case .budget:
-            throw ChatError.unsupported("\(provider.name) takes a reasoning effort, not a token budget.")
         }
         return body.merging(extra: request.extraBody)
     }
@@ -134,7 +115,7 @@ public struct OpenAICompatibleChatClient: ChatClient {
         return messages.map { ["role": .string($0.role.rawValue), "content": .string($0.content)] }
     }
 
-    public static func decodeResult(from data: Data) throws -> ChatResult {
+    static func decodeResult(from data: Data) throws -> ChatResult {
         let response = try ChatHTTP.decode(OpenAIChatResponse.self, from: data)
         guard let choice = response.choices.first else {
             throw ChatError.noResultReturned
@@ -143,16 +124,15 @@ public struct OpenAICompatibleChatClient: ChatClient {
             text: ReasoningText.strip(choice.message?.content?.answer ?? ""),
             finishReason: mapFinishReason(choice.finishReason),
             rawFinishReason: choice.finishReason,
-            usage: OpenAIUsage.chatUsage(from: response.usage),
-            model: response.model
+            usage: OpenAIUsage.chatUsage(from: response.usage)
         )
     }
 
-    /// OpenAI's finish reasons, plus Mistral's `model_length` and the `max_tokens` some
-    /// gateways pass through from Anthropic models.
+    /// OpenAI's finish reasons, plus Mistral's `model_length`. `max_tokens` and
+    /// `max_output_tokens` are the others VoiceInk's OpenRouter policy treats as truncation.
     static func mapFinishReason(_ reason: String?) -> FinishReason {
         switch reason?.lowercased() {
-        case "stop", "end_turn", "stop_sequence", "eos": return .stop
+        case "stop": return .stop
         case "length", "model_length", "max_tokens", "max_output_tokens": return .length
         case "content_filter": return .contentFilter
         case "tool_calls", "function_call": return .toolCalls
@@ -180,15 +160,12 @@ struct OpenAIChatResponse: Decodable {
     struct Message: Decodable {
         let content: MessageContent?
     }
-
-    let model: String?
     let provider: JSONValue?
     let choices: [Choice]
     let usage: JSONValue?
     let openRouterMetadata: JSONValue?
 
     enum CodingKeys: String, CodingKey {
-        case model
         case provider
         case choices
         case usage
@@ -224,7 +201,7 @@ enum MessageContent: Decodable {
         case .text(let text):
             return text
         case .chunks(let chunks):
-            return chunks.filter { $0.type == "text" || $0.type == "output_text" }.compactMap(\.text).joined()
+            return chunks.filter { $0.type == "text" }.compactMap(\.text).joined()
         }
     }
 }

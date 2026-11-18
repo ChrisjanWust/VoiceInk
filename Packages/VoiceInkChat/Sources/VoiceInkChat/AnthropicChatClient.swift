@@ -16,28 +16,22 @@ import Foundation
 /// - `.effort(e)`: `thinking: {type: adaptive, display: omitted}` and `output_config.effort`.
 /// - `.enabled`: adaptive thinking at the model's default effort.
 /// - `.disabled`: `thinking: {type: disabled}`.
-/// - `.budget(n)`: `thinking: {type: enabled, budget_tokens: n}`, with `n` added to
-///   `max_tokens`, so ``ChatRequest/maxTokens`` stays the budget for the answer itself.
 ///
-/// For anything else, such as `between_tools` thinking, set `thinking` in ``ChatRequest/extraBody``.
+/// For anything else, such as a token budget or `between_tools` thinking, set `thinking` (and
+/// ``ChatRequest/maxTokens``) yourself through ``ChatRequest/extraBody``. A beta header goes in
+/// ``ChatRequest/extraHeaders``.
 /// Only `text` blocks reach the answer. `thinking` and `redacted_thinking` blocks are dropped.
 public struct AnthropicChatClient: ChatClient {
-    public static let defaultEndpoint = URL(string: "https://api.anthropic.com/v1/messages")!
-    public static let apiVersion = "2023-06-01"
+    static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
+    static let apiVersion = "2023-06-01"
     /// LLMkit's default, used when ``ChatRequest/maxTokens`` is `nil`. The API requires the field.
-    public static let defaultMaxTokens = 8192
+    static let defaultMaxTokens = 8192
 
     public var apiKey: String
-    public var endpoint: URL
-    /// Sent as `anthropic-beta`, comma-separated.
-    public var betas: [String]
-    public var http: ChatHTTP
+    var http = ChatHTTP.shared
 
-    public init(apiKey: String, endpoint: URL = defaultEndpoint, betas: [String] = [], http: ChatHTTP = .shared) {
+    public init(apiKey: String) {
         self.apiKey = apiKey
-        self.endpoint = endpoint
-        self.betas = betas
-        self.http = http
     }
 
     public func complete(_ request: ChatRequest) async throws -> ChatResult {
@@ -46,28 +40,26 @@ public struct AnthropicChatClient: ChatClient {
         return try Self.decodeResult(from: data)
     }
 
-    public func makeURLRequest(_ request: ChatRequest) throws -> URLRequest {
+    func makeURLRequest(_ request: ChatRequest) throws -> URLRequest {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw ChatError.missingAPIKey }
         let headers = ChatHTTP.mergedHeaders(
-            betas.isEmpty ? [:] : ["anthropic-beta": betas.joined(separator: ",")],
             request.extraHeaders,
             ["x-api-key": key, "anthropic-version": Self.apiVersion]
         )
-        return try ChatHTTP.jsonRequest(url: endpoint, body: try Self.body(for: request), headers: headers)
+        return try ChatHTTP.jsonRequest(url: Self.endpoint, body: try Self.body(for: request), headers: headers)
     }
 
-    public static func body(for request: ChatRequest) throws -> [String: JSONValue] {
-        var maxTokens = request.maxTokens ?? defaultMaxTokens
+    static func body(for request: ChatRequest) throws -> [String: JSONValue] {
         var body: [String: JSONValue] = [
             "model": .string(request.model),
+            "max_tokens": .number(Double(request.maxTokens ?? defaultMaxTokens)),
             "messages": .array(
                 request.conversation.map { ["role": .string($0.role.rawValue), "content": .string($0.content)] }
             ),
         ]
         if let system = request.resolvedSystem { body["system"] = .string(system) }
         if let temperature = request.temperature { body["temperature"] = .number(temperature) }
-        if let serviceTier = request.serviceTier { body["service_tier"] = .string(serviceTier) }
 
         switch request.reasoning {
         case nil:
@@ -79,15 +71,11 @@ public struct AnthropicChatClient: ChatClient {
             body["thinking"] = ["type": "adaptive", "display": "omitted"]
         case .disabled:
             body["thinking"] = ["type": "disabled"]
-        case .budget(let tokens):
-            body["thinking"] = ["type": "enabled", "budget_tokens": .number(Double(tokens))]
-            maxTokens += tokens
         }
-        body["max_tokens"] = .number(Double(maxTokens))
         return body.merging(extra: request.extraBody)
     }
 
-    public static func decodeResult(from data: Data) throws -> ChatResult {
+    static func decodeResult(from data: Data) throws -> ChatResult {
         let response = try ChatHTTP.decode(ResponseBody.self, from: data)
         let text = response.content.filter { $0.type == "text" }.compactMap(\.text).joined()
         return try ChatResult.make(
@@ -96,8 +84,7 @@ public struct AnthropicChatClient: ChatClient {
             rawFinishReason: response.stopReason,
             usage: response.usage.map {
                 ChatUsage(inputTokens: $0["input_tokens"]?.intValue, outputTokens: $0["output_tokens"]?.intValue)
-            },
-            model: response.model
+            }
         )
     }
 
@@ -118,14 +105,11 @@ public struct AnthropicChatClient: ChatClient {
             let type: String
             let text: String?
         }
-
-        let model: String?
         let content: [ContentBlock]
         let stopReason: String?
         let usage: JSONValue?
 
         enum CodingKeys: String, CodingKey {
-            case model
             case content
             case stopReason = "stop_reason"
             case usage

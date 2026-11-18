@@ -48,10 +48,17 @@ final class Stub: @unchecked Sendable {
     }
 
     /// A transport whose retries wait 10 ms instead of 1 s and 2 s.
-    var http: ChatHTTP {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        return ChatHTTP(session: ChatHTTP.makeSession(configuration: configuration), retryBaseDelay: 0.01)
+    var http: ChatHTTP { http(retryBaseDelay: 0.01) }
+
+    func http(retryBaseDelay: TimeInterval) -> ChatHTTP {
+        ChatHTTP(
+            makeConfiguration: {
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.protocolClasses = [StubURLProtocol.self]
+                return configuration
+            },
+            retryBaseDelay: retryBaseDelay
+        )
     }
 }
 

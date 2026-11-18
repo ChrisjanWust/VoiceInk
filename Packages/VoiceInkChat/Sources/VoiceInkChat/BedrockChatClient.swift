@@ -1,11 +1,12 @@
 // Request and response shapes ported from teunlao/swift-ai-sdk (commit 35c334a4, Apache-2.0;
 // see LICENSE-APACHE-2.0 in this package):
-// - Sources/AmazonBedrockProvider/BedrockChatLanguageModel.swift (Converse body, per-family
-//   reasoning fields in additionalModelRequestFields, serviceTier)
+// - Sources/AmazonBedrockProvider/BedrockChatLanguageModel.swift (Converse body,
+//   additionalModelRequestFields)
 // - Sources/AmazonBedrockProvider/MapBedrockFinishReason.swift
 // - Sources/AmazonBedrockProvider/BedrockProvider.swift (bearer API keys)
-// Modified for VoiceInkChat: text-only, no tools, SigV4, guardrails or streaming; the message
-// normalisation and trailing-space cleanup from VoiceInk's in-app BedrockConverseClient.
+// Modified for VoiceInkChat: text-only, no tools, SigV4, guardrails, reasoning mapping or
+// streaming; the message normalisation and trailing-space cleanup from VoiceInk's in-app
+// BedrockConverseClient.
 
 import Foundation
 
@@ -14,37 +15,33 @@ import Foundation
 ///
 /// `POST https://bedrock-runtime.{region}.amazonaws.com/model/{modelId}/converse`
 ///
-/// Reasoning goes in `additionalModelRequestFields`, in the shape each model family expects:
-/// - Anthropic (`anthropic.` IDs): the same `thinking` and `output_config` as
-///   ``AnthropicChatClient``. A budget is added on top of `inferenceConfig.maxTokens`.
-/// - OpenAI gpt-oss: `reasoning_effort`. Other OpenAI models: `reasoning.effort`.
-/// - Amazon Nova 2: `reasoningConfig` with `type` and `maxReasoningEffort`.
-/// - Other families have no known field, so a reasoning setting throws ``ChatError/unsupported(_:)``.
+/// Reasoning fields differ per model and are read from each model's schema, so the caller
+/// passes them in `additionalModelRequestFields` (see ``complete(_:additionalModelRequestFields:)``),
+/// and ``ChatRequest/reasoning`` throws ``ChatError/unsupported(_:)``. ``ChatRequest/extraBody`` is
+/// merged over the top-level Converse body, which is where Fast mode's `performanceConfig` goes.
 ///
-/// ``additionalModelRequestFields`` in ``complete(_:additionalModelRequestFields:)`` is merged
-/// over that mapping, and ``ChatRequest/extraBody`` over the top-level Converse body.
-/// ``ChatRequest/serviceTier`` becomes `serviceTier: {type: …}`.
-///
-/// Only `text` blocks reach the answer; `reasoningContent` blocks are dropped.
+/// Only `text` blocks reach the answer; `reasoningContent` blocks and inline `<think>` sections
+/// are dropped.
 public struct BedrockChatClient: ChatClient {
     /// Statuses the in-app client retries: throttling and server errors, including 529.
     /// 424 (`ModelErrorException`) isn't retried, since the model itself failed.
-    public static let retryableStatusCodes: Set<Int> = [429, 500, 502, 503, 504, 529]
+    static let retryableStatusCodes: Set<Int> = [429, 500, 502, 503, 504, 529]
 
     public var apiKey: String
     public var region: String
-    public var http: ChatHTTP
+    var http = ChatHTTP.shared
 
-    public init(apiKey: String, region: String, http: ChatHTTP = .shared) {
+    public init(apiKey: String, region: String) {
         self.apiKey = apiKey
         self.region = region
-        self.http = http
     }
 
     public func complete(_ request: ChatRequest) async throws -> ChatResult {
         try await complete(request, additionalModelRequestFields: [:])
     }
 
+    /// Sends the request with model-specific fields, such as `reasoning_config` or
+    /// `output_config`, in `additionalModelRequestFields`.
     public func complete(
         _ request: ChatRequest,
         additionalModelRequestFields: [String: JSONValue]
@@ -62,12 +59,12 @@ public struct BedrockChatClient: ChatClient {
 
     // MARK: - Request
 
-    public static func normalizedRegion(_ region: String) -> String {
+    static func normalizedRegion(_ region: String) -> String {
         region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     /// Accepts keys pasted with a `Bearer ` prefix.
-    public static func normalizedAPIKey(_ apiKey: String) -> String {
+    static func normalizedAPIKey(_ apiKey: String) -> String {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let prefix = key.range(of: #"^bearer(\s+|$)"#, options: [.regularExpression, .caseInsensitive]) else {
             return key
@@ -76,11 +73,11 @@ public struct BedrockChatClient: ChatClient {
     }
 
     /// Region codes such as `us-east-1`, `eu-central-2` and `us-gov-west-1`.
-    public static func isValidRegion(_ region: String) -> Bool {
+    static func isValidRegion(_ region: String) -> Bool {
         normalizedRegion(region).range(of: #"^[a-z]{2}(-[a-z]+)+-[0-9]{1,2}$"#, options: .regularExpression) != nil
     }
 
-    public static func endpoint(region: String, modelID: String) throws -> URL {
+    static func endpoint(region: String, modelID: String) throws -> URL {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         let encodedModelID = modelID.addingPercentEncoding(withAllowedCharacters: allowed) ?? modelID
@@ -89,7 +86,7 @@ public struct BedrockChatClient: ChatClient {
         return url
     }
 
-    public func makeURLRequest(
+    func makeURLRequest(
         _ request: ChatRequest,
         additionalModelRequestFields: [String: JSONValue] = [:]
     ) throws -> URLRequest {
@@ -101,8 +98,6 @@ public struct BedrockChatClient: ChatClient {
         let modelID = request.model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !modelID.isEmpty else { throw ChatError.unsupported("Bedrock needs a model ID or inference profile ID.") }
 
-        var request = request
-        request.model = modelID
         let headers = ChatHTTP.mergedHeaders(
             ["Accept": "application/json"], request.extraHeaders, ["Authorization": "Bearer \(key)"])
         return try ChatHTTP.jsonRequest(
@@ -112,10 +107,14 @@ public struct BedrockChatClient: ChatClient {
         )
     }
 
-    public static func body(
+    static func body(
         for request: ChatRequest,
-        additionalModelRequestFields extra: [String: JSONValue] = [:]
+        additionalModelRequestFields: [String: JSONValue] = [:]
     ) throws -> [String: JSONValue] {
+        if request.reasoning != nil {
+            throw ChatError.unsupported(
+                "Bedrock reasoning fields differ per model. Pass them in additionalModelRequestFields.")
+        }
         var body: [String: JSONValue] = [
             "messages": .array(
                 normalizedTurns(request.conversation).map {
@@ -126,71 +125,14 @@ public struct BedrockChatClient: ChatClient {
         if let system = request.resolvedSystem, !system.isEmpty {
             body["system"] = [["text": .string(system)]]
         }
-
         var inference: [String: JSONValue] = [:]
         if let maxTokens = request.maxTokens { inference["maxTokens"] = .number(Double(maxTokens)) }
         if let temperature = request.temperature { inference["temperature"] = .number(temperature) }
-
-        var additional = try reasoningFields(for: request.reasoning, modelID: request.model)
-        if case .budget(let tokens) = request.reasoning {
-            // Same rule as the Anthropic client: the budget comes on top of the answer's tokens.
-            inference["maxTokens"] = .number(Double((request.maxTokens ?? AnthropicChatClient.defaultMaxTokens) + tokens))
-        }
-        additional = additional.merging(extra: extra)
-
         if !inference.isEmpty { body["inferenceConfig"] = .object(inference) }
-        if !additional.isEmpty { body["additionalModelRequestFields"] = .object(additional) }
-        if let serviceTier = request.serviceTier { body["serviceTier"] = ["type": .string(serviceTier)] }
-        return body.merging(extra: request.extraBody)
-    }
-
-    enum ModelFamily: Equatable {
-        case anthropic
-        case gptOSS
-        case openAI
-        case nova
-        case other
-    }
-
-    /// The family from a model ID, inference profile ID (`us.anthropic.…`) or ARN.
-    static func family(of modelID: String) -> ModelFamily {
-        let id = modelID.lowercased()
-        if id.contains("anthropic.") { return .anthropic }
-        if id.contains("openai.gpt-oss") { return .gptOSS }
-        if id.range(of: #"(^|[.:/])openai\."#, options: .regularExpression) != nil { return .openAI }
-        if id.contains("amazon.nova-2") { return .nova }
-        return .other
-    }
-
-    static func reasoningFields(for reasoning: ChatRequest.Reasoning?, modelID: String) throws -> [String: JSONValue] {
-        guard let reasoning else { return [:] }
-        let family = family(of: modelID)
-        switch (family, reasoning) {
-        case (.anthropic, .effort(let effort)):
-            return ["thinking": ["type": "adaptive", "display": "omitted"], "output_config": ["effort": .string(effort)]]
-        case (.anthropic, .enabled):
-            return ["thinking": ["type": "adaptive", "display": "omitted"]]
-        case (.anthropic, .disabled):
-            return ["thinking": ["type": "disabled"]]
-        case (.anthropic, .budget(let tokens)):
-            return ["thinking": ["type": "enabled", "budget_tokens": .number(Double(tokens))]]
-        case (.gptOSS, .effort(let effort)):
-            return ["reasoning_effort": .string(effort)]
-        case (.openAI, .effort(let effort)):
-            return ["reasoning": ["effort": .string(effort)]]
-        case (.openAI, .disabled):
-            return ["reasoning": ["effort": "none"]]
-        case (.nova, .effort(let effort)):
-            return ["reasoningConfig": ["type": "enabled", "maxReasoningEffort": .string(effort)]]
-        case (.nova, .enabled):
-            return ["reasoningConfig": ["type": "enabled"]]
-        case (.nova, .disabled):
-            return ["reasoningConfig": ["type": "disabled"]]
-        default:
-            throw ChatError.unsupported(
-                "No known Bedrock reasoning field for \(modelID) with \(reasoning). Pass additionalModelRequestFields instead."
-            )
+        if !additionalModelRequestFields.isEmpty {
+            body["additionalModelRequestFields"] = .object(additionalModelRequestFields)
         }
+        return body.merging(extra: request.extraBody)
     }
 
     /// Converse requires turns to alternate and to start with the user. The Assistant can leave
@@ -211,11 +153,9 @@ public struct BedrockChatClient: ChatClient {
 
     // MARK: - Response
 
-    public static func decodeResult(from data: Data) throws -> ChatResult {
+    static func decodeResult(from data: Data) throws -> ChatResult {
         let response = try ChatHTTP.decode(ResponseBody.self, from: data)
-        let text = (response.output?.message?.content ?? [])
-            .compactMap(\.text)
-            .joined()
+        let text = ReasoningText.strip((response.output?.message?.content ?? []).compactMap(\.text).joined())
             // Some models end lines with Markdown hard-break spaces, which would be pasted.
             .replacingOccurrences(of: "[ \t]+(?=\n|$)", with: "", options: .regularExpression)
         return try ChatResult.make(

@@ -2,24 +2,14 @@ import Foundation
 
 /// Removes reasoning that some models write inline in their answer text.
 ///
-/// Open-weight reasoning models served through OpenAI-compatible APIs (and Ollama models that
-/// don't support `think`) can return their reasoning inside the answer, wrapped in
-/// `<think>…</think>` (or `<thinking>`, `<reasoning>`). Some chat templates open the tag in
-/// the prompt, so only the closing tag appears in the output.
+/// Open-weight reasoning models served through OpenAI-compatible APIs, Bedrock, or Ollama
+/// (for models that don't support `think`) can return their reasoning inside the answer,
+/// wrapped in `<think>…</think>`. Some chat templates open the tag in the prompt, so only the
+/// closing tag appears in the output.
 enum ReasoningText {
-    private static let tagNames = ["think", "thinking", "reasoning"]
-
     static func strip(_ text: String) -> String {
-        var result = text
-        for name in tagNames {
-            result = stripBlocks(named: name, from: result)
-        }
-        return result
-    }
-
-    private static func stripBlocks(named name: String, from text: String) -> String {
-        let open = "<\(name)>"
-        let close = "</\(name)>"
+        let open = "<think>"
+        let close = "</think>"
         var result = text
 
         // An answer that starts inside an open block: everything up to the first lone close tag.

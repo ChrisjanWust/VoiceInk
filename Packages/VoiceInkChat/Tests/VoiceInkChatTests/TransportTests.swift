@@ -36,14 +36,7 @@ import Testing
         #expect(stub.attempts == 1)
     }
 
-    @Test func maxRetriesAndCustomStatusesAreRespected() async throws {
-        let none = Stub([.respond(status: 500, body: "")])
-        await #expect(throws: ChatError.self) {
-            try await none.http.send(get(none), timeout: 5, retryOnTimeout: false, maxRetries: 0)
-        }
-        #expect(none.attempts == 1)
-
-        // Ollama's statuses: 501 isn't retried.
+    @Test func ollamaStatusesDontRetry501() async throws {
         let ollama = Stub([.respond(status: 501, body: "")])
         await #expect(throws: ChatError.self) {
             try await ollama.http.send(
@@ -51,6 +44,14 @@ import Testing
                 retryableStatusCodes: ChatHTTP.defaultRetryableStatusCodes)
         }
         #expect(ollama.attempts == 1)
+    }
+
+    @Test func serverErrorsWaitBeforeRetrying() async throws {
+        let stub = Stub([.respond(status: 503, body: "busy"), ok])
+        let started = Date()
+        _ = try await stub.http(retryBaseDelay: 0.5).send(get(stub), timeout: 5, retryOnTimeout: false)
+        #expect(stub.attempts == 2)
+        #expect(Date().timeIntervalSince(started) >= 0.5)
     }
 
     @Test func timeoutWithoutRetryFailsAfterOneAttempt() async throws {
@@ -66,11 +67,27 @@ import Testing
     @Test func timeoutIsPerAttemptAndRetriedImmediatelyWhenAllowed() async throws {
         let stub = Stub([.hang, .hang, ok])
         let started = Date()
-        let data = try await stub.http.send(get(stub), timeout: 0.3, retryOnTimeout: true)
+        // With a 0.5 s backoff, waiting before either timeout retry would take at least 1.1 s.
+        let data = try await stub.http(retryBaseDelay: 0.5).send(get(stub), timeout: 0.3, retryOnTimeout: true)
         #expect(!data.isEmpty)
         #expect(stub.attempts == 3)
-        // Two timed-out attempts and no backoff between them.
-        #expect(Date().timeIntervalSince(started) < 2)
+        #expect(Date().timeIntervalSince(started) < 1.05)
+    }
+
+    @Test func aTimedOutAttemptGetsANewSession() async throws {
+        let stub = Stub([.hang, ok])
+        let http = stub.http
+        let before = http.sessions.current
+        _ = try await http.send(get(stub), timeout: 0.3, retryOnTimeout: true)
+        let afterTimeout = http.sessions.current
+        #expect(afterTimeout !== before)
+
+        // A successful request keeps the session, so the connection is reused.
+        let reused = Stub([ok])
+        let reusedHTTP = reused.http
+        let first = reusedHTTP.sessions.current
+        _ = try await reusedHTTP.send(get(reused), timeout: 5, retryOnTimeout: false)
+        #expect(reusedHTTP.sessions.current === first)
     }
 
     @Test func slowResponseCountsAgainstTheWholeAttempt() async throws {
@@ -140,48 +157,6 @@ import Testing
         }
     }
 
-    @Test func oneSharedSessionIsReused() {
-        #expect(ChatHTTP.shared.session === ChatHTTP.sharedSession)
-        #expect(ChatHTTP().session === ChatHTTP.shared.session)
-        #expect(OpenAICompatibleChatClient(apiKey: "k", provider: .openAI).http.session === ChatHTTP.sharedSession)
-    }
-
-    // MARK: Streaming
-
-    @Test func streamsServerSentEventsAcrossArbitraryChunks() async throws {
-        let stub = Stub([.chunks(
-            status: 200,
-            headers: ["Content-Type": "text/event-stream"],
-            pieces: [": OPENROUTER PROCESSING\n\n", "data: {\"a\":", "1}\n\nevent: done\nda", "ta: [DONE]\r\n\r\n", "data: tail"],
-            pause: 0.02
-        )])
-        var events: [ServerSentEvent] = []
-        for try await event in stub.http.events(get(stub), timeout: 5, retryOnTimeout: false) {
-            events.append(event)
-        }
-        #expect(events == [
-            ServerSentEvent(data: #"{"a":1}"#),
-            ServerSentEvent(event: "done", data: "[DONE]"),
-            ServerSentEvent(data: "tail"),
-        ])
-        #expect(stub.requests.first?.value(forHTTPHeaderField: "Accept") == "text/event-stream")
-    }
-
-    @Test func streamRetriesBeforeHeadersAndReportsHTTPErrors() async throws {
-        let stub = Stub([.respond(status: 503, body: "busy"), .chunks(status: 200, pieces: ["data: hi\n\n"])])
-        var events: [ServerSentEvent] = []
-        for try await event in stub.http.events(get(stub), timeout: 5, retryOnTimeout: false) {
-            events.append(event)
-        }
-        #expect(events.map(\.data) == ["hi"])
-        #expect(stub.attempts == 2)
-
-        let failing = Stub([.respond(status: 400, body: #"{"error": {"message": "stream not allowed"}}"#)])
-        await #expect(throws: ChatError.httpError(statusCode: 400, message: "stream not allowed", errorType: nil)) {
-            for try await _ in failing.http.events(get(failing), timeout: 5, retryOnTimeout: false) {}
-        }
-    }
-
     // MARK: Clients end to end
 
     @Test func clientsSendThroughTheTransport() async throws {
@@ -189,11 +164,8 @@ import Testing
             .respond(status: 500, body: "oops"),
             .respond(status: 200, body: #"{"choices": [{"message": {"content": "Done."}, "finish_reason": "stop"}]}"#),
         ])
-        let client = OpenAICompatibleChatClient(
-            apiKey: "k",
-            provider: .custom(endpoint: stub.url("v1/chat/completions")),
-            http: stub.http
-        )
+        var client = OpenAICompatibleChatClient(apiKey: "k", provider: .custom(endpoint: stub.url("v1/chat/completions")))
+        client.http = stub.http
         let result = try await client.complete(dictation)
         #expect(result.text == "Done.")
         #expect(stub.attempts == 2)
@@ -202,29 +174,20 @@ import Testing
 
     @Test func ollamaClientUsesItsBaseURL() async throws {
         let stub = Stub([.respond(status: 200, body: #"{"message": {"content": "Hi"}, "done_reason": "stop"}"#)])
-        let result = try await OllamaChatClient(baseURL: stub.baseURL, http: stub.http).complete(dictation)
+        var client = OllamaChatClient(baseURL: stub.baseURL)
+        client.http = stub.http
+        let result = try await client.complete(dictation)
         #expect(result.text == "Hi")
         #expect(stub.requests.first?.url?.path == "/api/chat")
     }
 
-    @Test func geminiFallsBackToV1BetaOn404AndRemembersIt() async throws {
-        let model = "gemini-test-\(UUID().uuidString)"
+    @Test func geminiSendsToTheVersionItWasGiven() async throws {
         let answer = #"{"status": "completed", "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Hi"}]}]}"#
-        let stub = Stub([
-            .respond(status: 404, body: #"{"error": {"code": 404, "message": "models/x is not found for API version v1", "status": "NOT_FOUND"}}"#),
-            .respond(status: 200, body: answer),
-        ])
-        let client = GeminiChatClient(apiKey: "k", baseURL: stub.baseURL, http: stub.http)
-        var chat = dictation
-        chat.model = model
-        #expect(try await client.complete(chat).text == "Hi")
-        #expect(try await client.complete(chat).text == "Hi")
-        #expect(stub.requests.map { $0.url?.path } == ["/v1/interactions", "/v1beta/interactions", "/v1beta/interactions"])
-
-        // An explicit version is used as given.
-        let explicit = Stub([.respond(status: 200, body: answer)])
-        let pinned = GeminiChatClient(apiKey: "k", apiVersion: .v1beta, baseURL: explicit.baseURL, http: explicit.http)
-        _ = try await pinned.complete(dictation)
-        #expect(explicit.requests.map { $0.url?.path } == ["/v1beta/interactions"])
+        let stub = Stub([.respond(status: 200, body: answer)])
+        var client = GeminiChatClient(apiKey: "k", apiVersion: .v1beta)
+        client.baseURL = stub.baseURL
+        client.http = stub.http
+        #expect(try await client.complete(dictation).text == "Hi")
+        #expect(stub.requests.map { $0.url?.path } == ["/v1beta/interactions"])
     }
 }

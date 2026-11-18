@@ -1,7 +1,8 @@
 import Foundation
 
 /// Errors from VoiceInkChat. The cases mirror LLMkit's `LLMKitError`, so the app can map
-/// them the same way, plus ``unsupported(_:)`` and an error type on HTTP failures.
+/// them the same way, plus ``unsupported(_:)`` and an error type on HTTP failures. Unlike
+/// LLMkit, there's no `unsupportedModel`; `unsupported` covers it.
 ///
 /// Cancellation is never wrapped: a cancelled task gets `CancellationError`.
 public enum ChatError: Error, LocalizedError, Sendable, Equatable {
@@ -46,11 +47,6 @@ public enum ChatError: Error, LocalizedError, Sendable, Equatable {
         case .timeout:
             return "The request timed out."
         }
-    }
-
-    public var statusCode: Int? {
-        if case .httpError(let statusCode, _, _) = self { return statusCode }
-        return nil
     }
 }
 

@@ -11,18 +11,13 @@ public enum JSONValue: Sendable, Hashable {
     case array([JSONValue])
     case object([String: JSONValue])
 
-    public var stringValue: String? {
+    var stringValue: String? {
         if case .string(let value) = self { return value }
         return nil
     }
 
-    public var objectValue: [String: JSONValue]? {
+    var objectValue: [String: JSONValue]? {
         if case .object(let value) = self { return value }
-        return nil
-    }
-
-    public var arrayValue: [JSONValue]? {
-        if case .array(let value) = self { return value }
         return nil
     }
 
@@ -36,12 +31,12 @@ public enum JSONValue: Sendable, Hashable {
     }
 
     /// Reads any JSON document.
-    public init(data: Data) throws {
+    init(data: Data) throws {
         self = try JSONDecoder().decode(JSONValue.self, from: data)
     }
 
     /// The value as compact JSON with sorted keys, so encodings are stable.
-    public func encoded() throws -> Data {
+    func encoded() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(self)

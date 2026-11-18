@@ -21,7 +21,6 @@ import Testing
         #expect(result.text == "The meeting moved to Thursday.")
         #expect(result.finishReason == .stop)
         #expect(!result.isTruncated)
-        #expect(result.model == "gpt-6-luna-2026-10-01")
         #expect(result.usage == ChatUsage(inputTokens: 42, outputTokens: 9, reasoningTokens: 0))
     }
 
@@ -66,7 +65,6 @@ import Testing
              "usage": {"prompt_tokens": 20, "completion_tokens": 30, "total_tokens": 50}}
             """))
         #expect(result.text == "The meeting is moved to Thursday.")
-        #expect(result.model == "magistral-medium-latest")
     }
 
     @Test func truncationIsReportedEvenWithNoText() throws {
@@ -192,12 +190,12 @@ import Testing
              "choices": [{"finish_reason": "stop", "native_finish_reason": "stop",
                           "message": {"role": "assistant", "content": "Moved to Thursday.", "reasoning": null}}],
              "usage": {"prompt_tokens": 5, "completion_tokens": 4, "completion_tokens_details": {"reasoning_tokens": 0}},
-             "openrouter_metadata": {"attempts": [{"provider": "Groq", "status": 200}]}}
+             "openrouter_metadata": {"attempt": 2, "attempts": [{"provider": "Groq", "status": 200}]}}
             """))
         #expect(result.text == "Moved to Thursday.")
         #expect(result.provider == "Groq")
-        #expect(result.model == "openai/gpt-oss-120b")
-        #expect(result.metadata?["attempts"]?.arrayValue?.count == 1)
+        // AIEnhancementService logs the routing attempt.
+        #expect(result.metadata?["attempt"]?.intValue == 2)
     }
 
     @Test func openRouterMistralChunksAndTruncation() throws {
@@ -252,6 +250,23 @@ import Testing
             {"output": {"message": {"content": []}}, "stopReason": "guardrail_intervened"}
             """))
         #expect(blocked.finishReason == .contentFilter)
+
+        // A guardrail's replacement text comes back as text, so the finish reason must be checked.
+        let replaced = try BedrockChatClient.decodeResult(from: data("""
+            {"output": {"message": {"content": [{"text": "Sorry, I can't help with that."}]}},
+             "stopReason": "guardrail_intervened"}
+            """))
+        #expect(replaced.text == "Sorry, I can't help with that.")
+        #expect(replaced.finishReason == .contentFilter)
+        #expect(!replaced.isTruncated)
+    }
+
+    @Test func bedrockStripsInlineThinkSections() throws {
+        let result = try BedrockChatClient.decodeResult(from: data("""
+            {"output": {"message": {"content": [{"text": "<think>Remove the fillers.</think>\\n\\nMoved to Thursday."}]}},
+             "stopReason": "end_turn"}
+            """))
+        #expect(result.text == "Moved to Thursday.")
     }
 
     // MARK: Error bodies
