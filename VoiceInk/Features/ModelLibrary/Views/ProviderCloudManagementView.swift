@@ -15,6 +15,11 @@ struct CloudProviderManagementView: View {
             .mistral,
             .cerebras,
             .bedrock,
+            .togetherAI,
+            .gmiCloud,
+            .baseten,
+            .fireworks,
+            .vercelAIGateway,
         ]
 
         var descriptors = enhancementProviders.map { aiProvider in
@@ -44,6 +49,7 @@ struct CloudProviderManagementView: View {
 
         let preferredOrder = [
             "Groq", "Cerebras", "Gemini", "OpenAI", "OpenRouter", "Anthropic", "Mistral", "Amazon Bedrock",
+            "Together AI", "Fireworks AI", "Baseten", "GMI Cloud", "Vercel AI Gateway",
             "Deepgram", "ElevenLabs", "Soniox", "Speechmatics", "AssemblyAI", "xAI", "Cartesia",
         ]
 
@@ -144,8 +150,10 @@ struct ProviderDescriptor: Identifiable {
 
     /// SF Symbol for providers that ship without a brand asset.
     var fallbackSymbolName: String? {
-        providerKey.caseInsensitiveCompare(AIProvider.bedrock.rawValue) == .orderedSame
-            ? "square.stack.3d.up.fill" : nil
+        if providerKey.caseInsensitiveCompare(AIProvider.bedrock.rawValue) == .orderedSame {
+            return "square.stack.3d.up.fill"
+        }
+        return AIProvider(rawValue: providerKey).flatMap(HostedModelProviders.symbolName(for:))
     }
 
     var apiConsoleURL: URL? {
@@ -181,7 +189,7 @@ struct ProviderDescriptor: Identifiable {
         case "amazon bedrock":
             return URL(string: "https://console.aws.amazon.com/bedrock/home#/api-keys")
         default:
-            return nil
+            return AIProvider(rawValue: providerKey).flatMap(HostedModelProviders.apiKeyURL(for:))
         }
     }
 }

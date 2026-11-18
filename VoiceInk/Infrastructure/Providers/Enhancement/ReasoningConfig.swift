@@ -261,6 +261,9 @@ struct ReasoningConfig {
             // Converse sends no reasoning parameters, so each Bedrock model runs on its
             // own default. Mapping levels needs per-model `additionalModelRequestFields`.
             return []
+        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
+            // Measured per model; see HostedModelProviders.
+            return HostedModelProviders.levels(for: provider, modelName: modelName)
         default:
             // Transcription-only providers, VoiceInk Refine, Local CLI, and any
             // provider without a mapping yet stay on Default.
@@ -345,6 +348,8 @@ struct ReasoningConfig {
             } else if groqNoneReasoningModels.contains(modelName) {
                 return "none"
             }
+        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
+            return HostedModelProviders.defaultEffort(for: provider, modelName: modelName)
         default:
             return nil
         }
