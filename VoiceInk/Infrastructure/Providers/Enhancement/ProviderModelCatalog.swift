@@ -167,9 +167,11 @@ enum ProviderModelCatalog {
     static func isGeminiEnhancementModel(_ id: String) -> Bool {
         let lowercased = id.lowercased()
         guard lowercased.hasPrefix("gemini-") || lowercased.hasPrefix("gemma-") else { return false }
-        // Gemini 1.x and 2.x reject a system instruction on /v1/interactions ("Developer
-        // instruction is not enabled for api version v1"), and enhancement always sends one.
-        if lowercased.range(of: #"^gemini-[12]\."#, options: .regularExpression) != nil { return false }
+        // Only Gemini 3 and later accept a system instruction on /v1/interactions, and
+        // enhancement always sends one.
+        if lowercased.hasPrefix("gemini-") {
+            guard let major = geminiMajorVersion(lowercased), major >= 3 else { return false }
+        }
         // Moving aliases such as `gemini-flash-latest` are v1beta-only without a `-preview`
         // suffix, so LLMkit would send them to v1, which returns 404.
         if lowercased.hasSuffix("-latest") { return false }
@@ -179,6 +181,12 @@ enum ProviderModelCatalog {
     }
 
     // MARK: - Helpers
+
+    /// The major version in a `gemini-<major>[.<minor>]-…` ID, or nil for unversioned IDs.
+    private static func geminiMajorVersion(_ id: String) -> Int? {
+        guard let range = id.range(of: #"^gemini-\d+"#, options: .regularExpression) else { return nil }
+        return Int(id[range].dropFirst("gemini-".count))
+    }
 
     /// Matches pinned snapshot suffixes: `-2025-04-14`, `-0613`, `-001`, `-09-2025`.
     private static func hasDatedSuffix(_ id: String) -> Bool {

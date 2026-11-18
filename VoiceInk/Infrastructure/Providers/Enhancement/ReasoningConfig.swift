@@ -22,8 +22,6 @@ struct ReasoningConfig {
         "gemini-3.1-flash-lite-preview",
     ]
 
-    // Gemini 2.5 Flash-Lite is intentionally omitted because its Interactions
-    // API default has thinking off.
     static func geminiThinkingLevel(for modelName: String) -> GeminiThinkingLevel? {
         if geminiMinimalThinkingModels.contains(modelName) {
             return .minimal

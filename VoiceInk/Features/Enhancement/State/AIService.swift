@@ -361,6 +361,7 @@ class AIService: ObservableObject {
         if userDefaults.string(forKey: "selectedAIProvider") == "GROQ" {
             userDefaults.set("Groq", forKey: "selectedAIProvider")
         }
+        GeminiModelMigration.migrateSavedSelection(in: userDefaults)
 
         if let savedProvider = userDefaults.string(forKey: "selectedAIProvider"),
             let provider = AIProvider(rawValue: savedProvider)
