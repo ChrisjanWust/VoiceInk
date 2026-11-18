@@ -394,6 +394,8 @@ struct APIKeyManagementView: View {
         case .openRouter: return URL(string: "https://openrouter.ai/keys")
         case .cerebras: return URL(string: "https://cloud.cerebras.ai/")
         case .bedrock: return URL(string: "https://console.aws.amazon.com/bedrock/home#/api-keys")
+        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
+            return HostedModelProviders.apiKeyURL(for: aiService.selectedProvider)
         default: return nil
         }
     }

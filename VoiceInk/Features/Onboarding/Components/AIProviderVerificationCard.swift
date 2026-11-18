@@ -443,6 +443,8 @@ fileprivate extension AIProvider {
             return URL(string: "https://cloud.cerebras.ai/platform")
         case .bedrock:
             return URL(string: "https://console.aws.amazon.com/bedrock/home#/api-keys")
+        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
+            return HostedModelProviders.apiKeyURL(for: self)
         default:
             return nil
         }

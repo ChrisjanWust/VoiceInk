@@ -30,6 +30,11 @@ final class APIKeyManager {
         "anthropic": "anthropicAPIKey",
         "openrouter": "openRouterAPIKey",
         "amazon bedrock": "bedrockAPIKey",
+        "together ai": "togetherAIAPIKey",
+        "gmi cloud": "gmiCloudAPIKey",
+        "baseten": "basetenAPIKey",
+        "fireworks ai": "fireworksAIAPIKey",
+        "vercel ai gateway": "vercelAIGatewayAPIKey",
     ]
 
     private init() {}

@@ -448,6 +448,191 @@ enum ProviderModelCatalog {
             .uniqued()
     }
 
+    // MARK: - Together AI
+
+    // `serverless=true` leaves out the models that only run on a dedicated endpoint, which
+    // return 400 for a serverless key.
+    static let togetherAIModelsEndpoint = URL(string: "https://api.together.xyz/v1/models?serverless=true")!
+
+    static func fetchTogetherAIModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
+        var request = URLRequest(url: togetherAIModelsEndpoint)
+        request.setValue("Bearer \(try validatedKey(apiKey))", forHTTPHeaderField: "Authorization")
+        let ids = try togetherAIEnhancementModelIDs(from: try await perform(request, timeout: timeout))
+        guard !ids.isEmpty else { throw CatalogError.noUsableModels }
+        return ids
+    }
+
+    /// Together returns a bare array with a `type` per model (`chat`, `image`, `audio`,
+    /// `embedding`, `rerank`, …). Keeps the chat models.
+    static func togetherAIEnhancementModelIDs(from data: Data) throws -> [String] {
+        try decode([TogetherAIModel].self, from: data)
+            .filter { model in
+                model.type == "chat"
+                    && isOpenAICompatibleChatModel(model.id)
+                    && !HostedModelProviders.isUnusable(model.id, for: .togetherAI)
+            }
+            .sorted { lhs, rhs in
+                if lhs.created != rhs.created { return (lhs.created ?? 0) > (rhs.created ?? 0) }
+                return lhs.id.localizedStandardCompare(rhs.id) == .orderedAscending
+            }
+            .map(\.id)
+            .uniqued()
+    }
+
+    // MARK: - GMI Cloud
+
+    static let gmiCloudModelsEndpoint = URL(string: "https://api.gmi-serving.com/v1/models")!
+
+    static func fetchGMICloudModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
+        try await fetchOpenAICompatibleModelIDs(
+            endpoint: gmiCloudModelsEndpoint,
+            apiKey: apiKey,
+            timeout: timeout,
+            filter: gmiCloudEnhancementModelIDs
+        )
+    }
+
+    static func gmiCloudEnhancementModelIDs(from data: Data) throws -> [String] {
+        gmiCloudEnhancementModelIDs(try decode(OpenAICompatibleModelList.self, from: data).data)
+    }
+
+    /// GMI's list has no capability fields and only serves text chat models today, so the
+    /// shared exclusions apply, plus the models that failed VoiceInk's request.
+    private static func gmiCloudEnhancementModelIDs(_ models: [OpenAICompatibleModel]) -> [String] {
+        models
+            .filter { isOpenAICompatibleChatModel($0.id) && !HostedModelProviders.isUnusable($0.id, for: .gmiCloud) }
+            .sortedNewestFirst()
+    }
+
+    // MARK: - Baseten
+
+    static let basetenModelsEndpoint = URL(string: "https://inference.baseten.co/v1/models")!
+
+    static func fetchBasetenModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
+        var request = URLRequest(url: basetenModelsEndpoint)
+        request.setValue("Bearer \(try validatedKey(apiKey))", forHTTPHeaderField: "Authorization")
+        let ids = try basetenEnhancementModelIDs(from: try await perform(request, timeout: timeout))
+        guard !ids.isEmpty else { throw CatalogError.noUsableModels }
+        return ids
+    }
+
+    /// Baseten's Model APIs list carries input and output modalities. Keeps the models that
+    /// take and return text.
+    static func basetenEnhancementModelIDs(from data: Data) throws -> [String] {
+        try decode(BasetenModelList.self, from: data).data
+            .filter { model in
+                (model.inputModalities ?? ["text"]).contains("text")
+                    && (model.outputModalities ?? ["text"]) == ["text"]
+                    && isOpenAICompatibleChatModel(model.id)
+                    && !HostedModelProviders.isUnusable(model.id, for: .baseten)
+            }
+            .sorted { lhs, rhs in
+                if lhs.created != rhs.created { return (lhs.created ?? 0) > (rhs.created ?? 0) }
+                return lhs.id.localizedStandardCompare(rhs.id) == .orderedAscending
+            }
+            .map(\.id)
+            .uniqued()
+    }
+
+    // MARK: - Fireworks AI
+
+    static let fireworksModelsEndpoint = URL(string: "https://api.fireworks.ai/inference/v1/models")!
+
+    static func fetchFireworksModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
+        var request = URLRequest(url: fireworksModelsEndpoint)
+        request.setValue("Bearer \(try validatedKey(apiKey))", forHTTPHeaderField: "Authorization")
+        let ids = try fireworksEnhancementModelIDs(from: try await perform(request, timeout: timeout))
+        guard !ids.isEmpty else { throw CatalogError.noUsableModels }
+        return ids
+    }
+
+    /// Fireworks marks chat models with `supports_chat` and embedding and reranker models
+    /// with `kind: EMBEDDING_MODEL`.
+    static func fireworksEnhancementModelIDs(from data: Data) throws -> [String] {
+        try decode(FireworksModelList.self, from: data).data
+            .filter { model in
+                model.supportsChat == true
+                    && model.kind != "EMBEDDING_MODEL"
+                    && isOpenAICompatibleChatModel(model.id)
+                    && !HostedModelProviders.isUnusable(model.id, for: .fireworks)
+            }
+            .sorted { lhs, rhs in
+                if lhs.created != rhs.created { return (lhs.created ?? 0) > (rhs.created ?? 0) }
+                return lhs.id.localizedStandardCompare(rhs.id) == .orderedAscending
+            }
+            .map(\.id)
+            .uniqued()
+    }
+
+    // MARK: - Vercel AI Gateway
+
+    // Public: the list answers without a key, so it can't verify one.
+    static let vercelAIGatewayModelsEndpoint = URL(string: "https://ai-gateway.vercel.sh/v1/models")!
+
+    static func fetchVercelAIGatewayModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
+        var request = URLRequest(url: vercelAIGatewayModelsEndpoint)
+        request.setValue("Bearer \(try validatedKey(apiKey))", forHTTPHeaderField: "Authorization")
+        let ids = try vercelAIGatewayEnhancementModelIDs(from: try await perform(request, timeout: timeout))
+        guard !ids.isEmpty else { throw CatalogError.noUsableModels }
+        return ids
+    }
+
+    /// Keeps the `language` models that return only text. The list also has image, video,
+    /// embedding, evaluation, speech, transcription, realtime and reranking models, and
+    /// `-batch` aliases that run through the batch API.
+    static func vercelAIGatewayEnhancementModelIDs(from data: Data, now: Date = Date()) throws -> [String] {
+        try decode(VercelAIGatewayModelList.self, from: data).data
+            .filter { model in
+                model.type == "language"
+                    && (model.modalities?.output ?? ["text"]) == ["text"]
+                    && !model.isRetired(asOf: now)
+                    && !model.id.lowercased().hasSuffix("-batch")
+                    && !GeminiModelMigration.isUnsupported(model.id)
+                    && isOpenAICompatibleChatModel(model.id)
+                    && !HostedModelProviders.isUnusable(model.id, for: .vercelAIGateway)
+            }
+            .sorted { lhs, rhs in
+                let lhsOwner = lhs.id.split(separator: "/").first.map(String.init) ?? lhs.id
+                let rhsOwner = rhs.id.split(separator: "/").first.map(String.init) ?? rhs.id
+                if lhsOwner != rhsOwner { return lhsOwner.localizedStandardCompare(rhsOwner) == .orderedAscending }
+                if lhs.released != rhs.released { return (lhs.released ?? 0) > (rhs.released ?? 0) }
+                return lhs.id.localizedStandardCompare(rhs.id) == .orderedAscending
+            }
+            .map(\.id)
+            .uniqued()
+    }
+
+    // MARK: - Key verification for Together AI, GMI Cloud, Baseten, Fireworks AI, Vercel AI Gateway
+
+    /// An authenticated GET that needs no model ID. Vercel's model list is public, so its key
+    /// is checked against `/v1/credits` instead.
+    static func keyVerificationEndpoint(for provider: AIProvider) -> URL? {
+        switch provider {
+        case .togetherAI: return URL(string: "https://api.together.xyz/v1/models")
+        case .gmiCloud: return gmiCloudModelsEndpoint
+        case .baseten: return basetenModelsEndpoint
+        case .fireworks: return fireworksModelsEndpoint
+        case .vercelAIGateway: return URL(string: "https://ai-gateway.vercel.sh/v1/credits")
+        default: return nil
+        }
+    }
+
+    static func verifyAPIKey(_ apiKey: String, for provider: AIProvider, timeout: TimeInterval = 10) async -> (
+        isValid: Bool, errorMessage: String?
+    ) {
+        guard let endpoint = keyVerificationEndpoint(for: provider) else {
+            return (false, "Invalid or missing base URL configuration")
+        }
+        do {
+            var request = URLRequest(url: endpoint)
+            request.setValue("Bearer \(try validatedKey(apiKey))", forHTTPHeaderField: "Authorization")
+            _ = try await perform(request, timeout: timeout)
+            return (true, nil)
+        } catch {
+            return (false, error.localizedDescription)
+        }
+    }
+
     // MARK: - OpenAI-compatible lists
 
     // OpenAI-style lists carry no capability fields, so special-purpose models are
@@ -755,6 +940,79 @@ private struct MistralModelCapabilities: Decodable {
         case audioTranscription = "audio_transcription"
         case audioTranscriptionRealtime = "audio_transcription_realtime"
         case audioSpeech = "audio_speech"
+    }
+}
+
+private struct TogetherAIModel: Decodable {
+    let id: String
+    let type: String?
+    let created: Int?
+}
+
+private struct BasetenModelList: Decodable {
+    let data: [BasetenModel]
+}
+
+private struct BasetenModel: Decodable {
+    let id: String
+    let created: Int?
+    let inputModalities: [String]?
+    let outputModalities: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case created
+        case inputModalities = "input_modalities"
+        case outputModalities = "output_modalities"
+    }
+}
+
+private struct FireworksModelList: Decodable {
+    let data: [FireworksModel]
+}
+
+private struct FireworksModel: Decodable {
+    let id: String
+    let created: Int?
+    let kind: String?
+    let supportsChat: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case created
+        case kind
+        case supportsChat = "supports_chat"
+    }
+}
+
+private struct VercelAIGatewayModelList: Decodable {
+    let data: [VercelAIGatewayCatalogModel]
+}
+
+private struct VercelAIGatewayCatalogModel: Decodable {
+    struct Modalities: Decodable {
+        let output: [String]?
+    }
+
+    let id: String
+    let type: String?
+    let released: Int?
+    let modalities: Modalities?
+    /// When the gateway stops serving the model, in milliseconds since 1970. Set ahead of time,
+    /// so a model with a future date still works.
+    let deprecatedAt: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case released
+        case modalities
+        case deprecatedAt = "deprecated_at"
+    }
+
+    func isRetired(asOf date: Date) -> Bool {
+        guard let deprecatedAt else { return false }
+        return Date(timeIntervalSince1970: deprecatedAt / 1000) <= date
     }
 }
 

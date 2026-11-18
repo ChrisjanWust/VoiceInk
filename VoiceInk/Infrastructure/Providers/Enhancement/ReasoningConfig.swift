@@ -426,6 +426,9 @@ struct ReasoningConfig {
         case .bedrock:
             // Read from the model's live catalog schema; custom IDs stay on Default.
             return BedrockReasoning.levels(for: modelInfo.bedrockModel)
+        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
+            // Measured per model; see HostedModelProviders.
+            return HostedModelProviders.levels(for: provider, modelName: modelName)
         default:
             // Transcription-only providers, VoiceInk Refine, Local CLI, and any
             // provider without a mapping yet stay on Default.
@@ -520,6 +523,8 @@ struct ReasoningConfig {
             } else if groqNoneReasoningModels.contains(modelName) {
                 return "none"
             }
+        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
+            return HostedModelProviders.defaultEffort(for: provider, modelName: modelName)
         default:
             return nil
         }

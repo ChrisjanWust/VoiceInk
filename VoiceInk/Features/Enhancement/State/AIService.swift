@@ -11,6 +11,11 @@ enum AIProvider: String, CaseIterable, Sendable {
     case openRouter = "OpenRouter"
     case mistral = "Mistral"
     case bedrock = "Amazon Bedrock"
+    case togetherAI = "Together AI"
+    case gmiCloud = "GMI Cloud"
+    case baseten = "Baseten"
+    case fireworks = "Fireworks AI"
+    case vercelAIGateway = "Vercel AI Gateway"
     case elevenLabs = "ElevenLabs"
     case deepgram = "Deepgram"
     case soniox = "Soniox"
@@ -39,6 +44,16 @@ enum AIProvider: String, CaseIterable, Sendable {
             return "https://api.mistral.ai/v1/chat/completions"
         case .bedrock:
             return BedrockRegion.runtimeEndpoint(for: BedrockRegion.current)
+        case .togetherAI:
+            return "https://api.together.xyz/v1/chat/completions"
+        case .gmiCloud:
+            return "https://api.gmi-serving.com/v1/chat/completions"
+        case .baseten:
+            return "https://inference.baseten.co/v1/chat/completions"
+        case .fireworks:
+            return "https://api.fireworks.ai/inference/v1/chat/completions"
+        case .vercelAIGateway:
+            return "https://ai-gateway.vercel.sh/v1/chat/completions"
         case .elevenLabs:
             return "https://api.elevenlabs.io/v1/speech-to-text"
         case .deepgram:
@@ -76,6 +91,16 @@ enum AIProvider: String, CaseIterable, Sendable {
             return "mistral-small-latest"
         case .bedrock:
             return "global.amazon.nova-2-lite-v1:0"
+        case .togetherAI:
+            return "deepseek-ai/DeepSeek-V4.1-Flash"
+        case .gmiCloud:
+            return "deepseek-ai/DeepSeek-V4.1-Flash"
+        case .baseten:
+            return "deepseek-ai/DeepSeek-V4.1-Flash"
+        case .fireworks:
+            return "accounts/fireworks/models/deepseek-v4p1-flash"
+        case .vercelAIGateway:
+            return "deepseek/deepseek-v4.1-flash"
         case .elevenLabs:
             return "scribe_v2"
         case .deepgram:
@@ -163,6 +188,9 @@ enum AIProvider: String, CaseIterable, Sendable {
                 "qwen.qwen3-next-80b-a3b",
                 "openai.gpt-oss-120b-1:0",
             ]
+        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
+            // Offline fallback; AIService replaces it with the live list once a key is set.
+            return HostedModelProviders.builtInModels(for: self)
         case .elevenLabs:
             return ["scribe_v2", "scribe_v2_medical"]
         case .deepgram:
@@ -215,6 +243,8 @@ enum AIProvider: String, CaseIterable, Sendable {
             return true
         case .bedrock:
             return true
+        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
+            return true
         default:
             return false
         }
@@ -225,6 +255,8 @@ enum AIProvider: String, CaseIterable, Sendable {
         case .cerebras, .groq, .gemini, .anthropic, .openAI, .mistral:
             return true
         case .bedrock:
+            return true
+        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
             return true
         default:
             return false
@@ -667,6 +699,9 @@ class AIService: ObservableObject {
                 region: BedrockRegion.current,
                 modelID: verificationModel
             )
+        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
+            // An authenticated GET checks the key without depending on a model ID.
+            result = await ProviderModelCatalog.verifyAPIKey(key, for: provider)
         case .cerebras:
             // GET /v1/models checks the key without depending on a model ID.
             result = await OpenAITranscriptionClient.verifyAPIKey(
@@ -988,6 +1023,16 @@ class AIService: ObservableObject {
                     return try await ProviderModelCatalog.fetchCerebrasModelIDs(apiKey: apiKey)
                 case .mistral:
                     return try await ProviderModelCatalog.fetchMistralModelIDs(apiKey: apiKey)
+                case .togetherAI:
+                    return try await ProviderModelCatalog.fetchTogetherAIModelIDs(apiKey: apiKey)
+                case .gmiCloud:
+                    return try await ProviderModelCatalog.fetchGMICloudModelIDs(apiKey: apiKey)
+                case .baseten:
+                    return try await ProviderModelCatalog.fetchBasetenModelIDs(apiKey: apiKey)
+                case .fireworks:
+                    return try await ProviderModelCatalog.fetchFireworksModelIDs(apiKey: apiKey)
+                case .vercelAIGateway:
+                    return try await ProviderModelCatalog.fetchVercelAIGatewayModelIDs(apiKey: apiKey)
                 default:
                     return try await ProviderModelCatalog.fetchOpenAIModelIDs(apiKey: apiKey)
                 }
