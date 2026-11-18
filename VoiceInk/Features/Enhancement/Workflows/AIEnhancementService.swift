@@ -390,7 +390,7 @@ class AIEnhancementService: ObservableObject {
 
         for index in updatedConfigurations.indices {
             if let provider = AIProvider(rawValue: updatedConfigurations[index].selectedAIProvider ?? ""),
-                provider == .gemini || provider == .openRouter,
+                provider == .gemini || provider == .openRouter || provider == .vercelAIGateway,
                 let modelName = updatedConfigurations[index].selectedAIModel
             {
                 let currentModel = GeminiModelMigration.resolvedModel(modelName, for: provider)

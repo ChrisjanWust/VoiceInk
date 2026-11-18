@@ -10,6 +10,8 @@ enum GeminiModelMigration {
     static let replacementModel = "gemini-3.8-flash"
     /// OpenRouter's ID for `replacementModel` (on its live list on 2026-11-18).
     static let openRouterReplacementModel = "google/gemini-3.8-flash"
+    /// Vercel AI Gateway's ID for `replacementModel` (on its live list on 2026-11-18).
+    static let vercelAIGatewayReplacementModel = "google/gemini-3.8-flash"
     private static let minimumMajorVersion = 3
 
     /// Returns the model to request: the provider's replacement for a Gemini model older
@@ -21,16 +23,18 @@ enum GeminiModelMigration {
             return replacementModel
         case .openRouter:
             return openRouterReplacementModel
+        case .vercelAIGateway:
+            return vercelAIGatewayReplacementModel
         default:
             return modelName
         }
     }
 
-    /// Replaces a Gemini model older than version 3 saved as the Gemini or OpenRouter
-    /// selection, or as the Auto-Learn reviewer model. Modes are repaired in
+    /// Replaces a Gemini model older than version 3 saved as the Gemini, OpenRouter or
+    /// Vercel AI Gateway selection, or as the Auto-Learn reviewer model. Modes are repaired in
     /// `AIEnhancementService.repairModePromptSelections`.
     static func migrateSavedSelection(in defaults: UserDefaults = .standard) {
-        for provider in [AIProvider.gemini, .openRouter] {
+        for provider in [AIProvider.gemini, .openRouter, .vercelAIGateway] {
             let selectedModelKey = "\(provider.rawValue)SelectedModel"
             let customModelIDKey = "\(provider.rawValue)CustomModelID"
 
