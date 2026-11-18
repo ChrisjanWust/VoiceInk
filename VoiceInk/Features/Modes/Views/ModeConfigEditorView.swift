@@ -122,6 +122,7 @@ struct ModeConfigEditorView: View {
         }
 
         draft.commitReasoningLevel()
+        draft.commitFastMode()
 
         switch mode {
         case .add:

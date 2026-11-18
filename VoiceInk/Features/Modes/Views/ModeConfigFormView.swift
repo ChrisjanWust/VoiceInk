@@ -477,6 +477,7 @@ struct ModeConfigFormView: View {
                 }
 
                 reasoningPicker(for: provider, model: modelBinding.wrappedValue)
+                fastModeToggle(for: provider, model: modelBinding.wrappedValue)
 
                 if provider == .openRouter {
                     Button("Refresh Models") {
@@ -510,6 +511,26 @@ struct ModeConfigFormView: View {
                         draft.selectedAIModel = model
                     }
                     draft.setReasoningLevel(level, for: provider, model: model)
+                }
+            )
+        )
+    }
+
+    private func fastModeToggle(for provider: AIProvider, model: String) -> some View {
+        EnhancementFastModeToggle(
+            provider: provider,
+            modelName: model,
+            isOn: Binding(
+                get: { draft.isFastModeEnabled(for: provider, model: model) },
+                set: { enabled in
+                    // Save the provider and model the form shows, so the choice applies to them.
+                    if draft.selectedAIProvider == nil {
+                        draft.selectedAIProvider = provider.rawValue
+                    }
+                    if draft.selectedAIModel?.isEmpty ?? true {
+                        draft.selectedAIModel = model
+                    }
+                    draft.setFastModeEnabled(enabled, for: provider, model: model)
                 }
             )
         )

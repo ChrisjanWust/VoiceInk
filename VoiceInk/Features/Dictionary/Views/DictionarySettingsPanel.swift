@@ -352,6 +352,7 @@ struct DictionarySettingsPanel: View {
                     savedCustomModelID: reviewerModel, draftModel: $reviewerModel)
                 SavedEnhancementReasoningPicker(provider: provider, modelName: reviewerModel,
                     modelInfo: reviewerAIService.reasoningModelInfo(for: provider, model: reviewerModel))
+                SavedEnhancementFastModeToggle(provider: provider, modelName: reviewerModel)
             }
             if !reviewProviders.contains(provider) {
                 Text("Connect this provider in AI Models to resume Auto-Learn review.")
