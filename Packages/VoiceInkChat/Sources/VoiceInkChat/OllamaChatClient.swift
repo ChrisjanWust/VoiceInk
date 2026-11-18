@@ -47,11 +47,10 @@ public struct OllamaChatClient: ChatClient {
     }
 
     public func makeURLRequest(_ request: ChatRequest) throws -> URLRequest {
-        var headers: [String: String] = [:]
+        var headers = request.extraHeaders
         if let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
             headers["Authorization"] = "Bearer \(key)"
         }
-        headers.merge(request.extraHeaders) { _, new in new }
         return try ChatHTTP.jsonRequest(url: endpoint, body: try body(for: request), headers: headers)
     }
 

@@ -95,8 +95,8 @@ public struct OpenAICompatibleChatClient: ChatClient {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw ChatError.missingAPIKey }
         let headers = provider.headers
-            .merging(["Authorization": "Bearer \(key)"]) { _, new in new }
-            .merging(request.extraHeaders) { _, new in new }
+            .merging(request.extraHeaders) { _, extra in extra }
+            .merging(["Authorization": "Bearer \(key)"]) { _, auth in auth }
         return try ChatHTTP.jsonRequest(url: provider.endpoint, body: try body(for: request), headers: headers)
     }
 

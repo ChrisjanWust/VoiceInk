@@ -49,9 +49,10 @@ public struct AnthropicChatClient: ChatClient {
     public func makeURLRequest(_ request: ChatRequest) throws -> URLRequest {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw ChatError.missingAPIKey }
-        var headers = ["x-api-key": key, "anthropic-version": Self.apiVersion]
+        var headers: [String: String] = [:]
         if !betas.isEmpty { headers["anthropic-beta"] = betas.joined(separator: ",") }
-        headers.merge(request.extraHeaders) { _, new in new }
+        headers.merge(request.extraHeaders) { _, extra in extra }
+        headers.merge(["x-api-key": key, "anthropic-version": Self.apiVersion]) { _, auth in auth }
         return try ChatHTTP.jsonRequest(url: endpoint, body: try Self.body(for: request), headers: headers)
     }
 

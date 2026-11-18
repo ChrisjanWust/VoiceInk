@@ -189,11 +189,12 @@ public struct OpenRouterChatClient: ChatClient {
     public func makeURLRequest(_ request: ChatRequest, options: Options) throws -> URLRequest {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw ChatError.missingAPIKey }
-        var headers = ["Authorization": "Bearer \(key)"]
+        var headers: [String: String] = [:]
         if includeRouterMetadata { headers["X-OpenRouter-Metadata"] = "enabled" }
         if let appReferer { headers["HTTP-Referer"] = appReferer.absoluteString }
         if let appTitle, !appTitle.isEmpty { headers["X-OpenRouter-Title"] = appTitle }
-        headers.merge(request.extraHeaders) { _, new in new }
+        headers.merge(request.extraHeaders) { _, extra in extra }
+        headers["Authorization"] = "Bearer \(key)"
         return try ChatHTTP.jsonRequest(url: endpoint, body: try Self.body(for: request, options: options), headers: headers)
     }
 

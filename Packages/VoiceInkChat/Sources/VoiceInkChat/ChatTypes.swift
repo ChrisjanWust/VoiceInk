@@ -71,7 +71,9 @@ public struct ChatRequest: Sendable, Equatable {
     /// Top-level body fields added last, so they override anything the client set.
     /// `.null` sends an explicit `null`.
     public var extraBody: [String: JSONValue]
-    /// Headers added last, so they override anything the client set.
+    /// Headers added on top of the client's own, such as a beta header. Authentication headers
+    /// (`Authorization`, `x-api-key`, `anthropic-version`, `x-goog-api-key`) always come from the
+    /// client, as in the app's in-app clients, so an extra header can't replace the key.
     public var extraHeaders: [String: String]
     /// The timeout for each attempt, in seconds. Up to three attempts are made.
     public var timeout: TimeInterval

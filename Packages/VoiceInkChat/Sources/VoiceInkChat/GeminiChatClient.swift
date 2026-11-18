@@ -95,7 +95,7 @@ public struct GeminiChatClient: ChatClient {
     public func makeURLRequest(_ request: ChatRequest, version: GeminiAPIVersion) throws -> URLRequest {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw ChatError.missingAPIKey }
-        let headers = ["x-goog-api-key": key].merging(request.extraHeaders) { _, new in new }
+        let headers = request.extraHeaders.merging(["x-goog-api-key": key]) { _, auth in auth }
         return try ChatHTTP.jsonRequest(url: endpoint(for: version), body: try body(for: request), headers: headers)
     }
 
