@@ -7,6 +7,14 @@ struct ReasoningModelInfo {
     var openRouterModel: OpenRouterModel? = nil
     /// Whether an Ollama model lists the "thinking" capability. `nil` when unknown.
     var ollamaSupportsThinking: Bool? = nil
+    /// The named thinking levels an Ollama model takes, such as `["low", "medium", "high"]`
+    /// for gpt-oss, from `/api/show`'s `thinking.values`. Empty for models with only an
+    /// on/off switch, and `nil` when unknown.
+    var ollamaThinkingLevels: [String]? = nil
+    /// The other IDs of a Mistral model, from the live list's aliases. For
+    /// `mistral-small-latest` this is the dated ID, such as `mistral-small-2603`. Empty when
+    /// unknown (offline, no key, or the built-in list).
+    var mistralAliasTargets: [String] = []
 }
 
 /// Reasoning parameters for enhancement requests.
@@ -195,6 +203,193 @@ struct ReasoningConfig {
         }
     }
 
+    // MARK: - Anthropic
+
+    // From Anthropic's effort and thinking docs (2026-11-18). IDs are matched without a
+    // trailing date, so `claude-haiku-4-5-20251001` is `claude-haiku-4-5`.
+
+    // Adaptive thinking, with every effort from low to max.
+    static let anthropicXHighEffortModels: Set<String> = [
+        "claude-fable-5-2", "claude-mythos-5-2", "claude-fable-5-1", "claude-mythos-5-1",
+        "claude-fable-5", "claude-mythos-5", "claude-opus-5-5", "claude-opus-5",
+        "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5-5", "claude-sonnet-5",
+        "claude-haiku-5-5",
+    ]
+
+    // Adaptive thinking, with low to max but no xhigh.
+    static let anthropicMaxEffortModels: Set<String> = [
+        "claude-opus-4-6", "claude-sonnet-4-6", "claude-mythos-preview",
+    ]
+
+    // Extended thinking only (`budget_tokens`). They reject adaptive thinking.
+    static let anthropicBudgetThinkingModels: Set<String> = [
+        "claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5",
+        "claude-opus-4-1", "claude-opus-4", "claude-sonnet-4", "claude-3-7-sonnet",
+    ]
+
+    // The one extended-thinking model that also takes effort. The docs say to set both.
+    static let anthropicBudgetAndEffortModels: Set<String> = ["claude-opus-4-5"]
+
+    // Models that think by default, so Default already reasons. Thinking can be turned off
+    // with `disabled` on some and `between_tools` on Sonnet 5.5; the rest can't turn it off.
+    static let anthropicThinkingByDefaultModels: Set<String> = [
+        "claude-fable-5-2", "claude-mythos-5-2", "claude-fable-5-1", "claude-mythos-5-1",
+        "claude-fable-5", "claude-mythos-5", "claude-mythos-preview", "claude-opus-5-5",
+        "claude-opus-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-haiku-5-5",
+    ]
+    static let anthropicDisabledThinkingModels: Set<String> = [
+        "claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5",
+    ]
+    static let anthropicBetweenToolsModels: Set<String> = ["claude-sonnet-5-5"]
+
+    // Models whose API default effort is medium rather than high.
+    static let anthropicMediumDefaultEffortModels: Set<String> = ["claude-opus-5-5", "claude-haiku-5-5"]
+
+    /// LLMkit's `max_tokens`, which Default sends. Thinking counts toward it.
+    static let anthropicDefaultMaxTokens = 8192
+
+    /// Strips a trailing `-YYYYMMDD` snapshot date.
+    static func anthropicModelFamily(_ modelName: String) -> String {
+        let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return model.replacingOccurrences(of: #"-\d{8}$"#, with: "", options: .regularExpression)
+    }
+
+    private static func anthropicLevels(for modelName: String) -> [ReasoningLevel] {
+        let family = anthropicModelFamily(modelName)
+        if anthropicBudgetThinkingModels.contains(family) {
+            // Thinking is off by default, so Off would repeat Default.
+            return [.low, .medium, .high]
+        }
+        let canTurnOff =
+            anthropicDisabledThinkingModels.contains(family) || anthropicBetweenToolsModels.contains(family)
+        let efforts: [ReasoningLevel] =
+            anthropicMaxEffortModels.contains(family)
+            ? [.low, .medium, .high, .max]
+            : [.low, .medium, .high, .xhigh, .max]
+        return (canTurnOff ? [.off] : []) + efforts
+    }
+
+    /// The effort Default runs at, for models that think by default. `nil` for models
+    /// that don't think unless asked.
+    private static func anthropicDefaultEffort(for modelName: String) -> ReasoningLevel? {
+        let family = anthropicModelFamily(modelName)
+        guard anthropicThinkingByDefaultModels.contains(family) else { return nil }
+        return anthropicMediumDefaultEffortModels.contains(family) ? .medium : .high
+    }
+
+    /// The request fields a picked Anthropic level sets.
+    struct AnthropicReasoning: Equatable {
+        var thinking: AnthropicThinking
+        var effort: String?
+        var maxTokens: Int
+
+        func apply(to request: inout AnthropicMessagesRequest) {
+            request.thinking = thinking
+            request.effort = effort
+            request.maxTokens = maxTokens
+        }
+    }
+
+    /// The reasoning fields for a picked level, or `nil` for Default, which LLMkit sends
+    /// without any. Thinking blocks are requested without text (`display: omitted`), since
+    /// VoiceInk never shows them.
+    static func anthropicReasoning(for modelName: String, level: ReasoningLevel?) -> AnthropicReasoning? {
+        guard let level = effectiveLevel(level, for: .anthropic, modelName: modelName) else {
+            return nil
+        }
+        let family = anthropicModelFamily(modelName)
+
+        if anthropicBudgetThinkingModels.contains(family) {
+            let budget: Int
+            switch level {
+            case .low: budget = 1024
+            case .medium: budget = 4096
+            default: budget = 16_000
+            }
+            return AnthropicReasoning(
+                thinking: .enabled(budgetTokens: budget, display: .omitted),
+                effort: anthropicBudgetAndEffortModels.contains(family) ? level.effortValue : nil,
+                maxTokens: anthropicDefaultMaxTokens + budget
+            )
+        }
+
+        if level == .off {
+            return AnthropicReasoning(
+                thinking: anthropicBetweenToolsModels.contains(family) ? .betweenTools : .disabled,
+                effort: nil,
+                maxTokens: anthropicDefaultMaxTokens
+            )
+        }
+
+        // xhigh and max think longer, and thinking counts toward `max_tokens`.
+        let maxTokens = [.xhigh, .max].contains(level) ? 32_000 : anthropicDefaultMaxTokens
+        return AnthropicReasoning(thinking: .adaptive(display: .omitted), effort: level.effortValue, maxTokens: maxTokens)
+    }
+
+    // MARK: - Mistral
+
+    // From Mistral's reasoning docs (2026-11-18), not live-tested: no Mistral key was
+    // available. `reasoning_effort` is the only control. Only the model IDs and values the
+    // docs name are offered. A `-latest` alias gets the levels of the dated ID it points to
+    // in the live list (`ReasoningModelInfo.mistralAliasTargets`). Without that mapping, and
+    // for any other ID, the model stays on Default.
+
+    // Mistral Small 4 and Medium 3.5 take "none" or "high".
+    static let mistralNoneOrHighModels: Set<String> = [
+        "mistral-small-2603",
+        "mistral-medium-3-5",
+    ]
+
+    // Mistral Large 4 takes low, medium and high, and uses high when it's omitted.
+    static let mistralLowToHighModels: Set<String> = [
+        "mistral-large-4",
+        "mistral-large-4-0",
+    ]
+
+    // GLM 5.3 takes low, high and max, and can't turn reasoning off.
+    static let mistralLowHighMaxModels: Set<String> = [
+        "zai-glm-5-3",
+        "zai-glm-5-3-flash",
+    ]
+
+    /// The ID the Mistral docs name for this model: the ID itself, or the first dated ID a
+    /// live-list alias points to that has documented levels. Requests still send `modelName`.
+    private static func mistralDocumentedModel(for modelName: String, aliasTargets: [String]) -> String {
+        ([modelName] + aliasTargets).first { !mistralDocumentedLevels(for: $0).isEmpty } ?? modelName
+    }
+
+    private static func mistralLevels(for modelName: String, aliasTargets: [String]) -> [ReasoningLevel] {
+        mistralDocumentedLevels(for: mistralDocumentedModel(for: modelName, aliasTargets: aliasTargets))
+    }
+
+    private static func mistralDocumentedLevels(for modelName: String) -> [ReasoningLevel] {
+        if mistralNoneOrHighModels.contains(modelName) {
+            return [.off, .high]
+        }
+        if mistralLowToHighModels.contains(modelName) {
+            return [.low, .medium, .high]
+        }
+        if mistralLowHighMaxModels.contains(modelName) {
+            return [.low, .high, .max]
+        }
+        return []
+    }
+
+    private static func mistralDefaultLevel(for modelName: String, aliasTargets: [String]) -> ReasoningLevel? {
+        mistralLowToHighModels.contains(mistralDocumentedModel(for: modelName, aliasTargets: aliasTargets))
+            ? .high : nil
+    }
+
+    /// The `reasoning_effort` for a picked level, or `nil` for Default, which LLMkit sends
+    /// without one.
+    static func mistralReasoningEffort(
+        for modelName: String,
+        level: ReasoningLevel?,
+        modelInfo: ReasoningModelInfo = ReasoningModelInfo()
+    ) -> String? {
+        effectiveLevel(level, for: .mistral, modelName: modelName, modelInfo: modelInfo)?.effortValue
+    }
+
     // MARK: - Shared
 
     // Every documented OpenAI-style effort. Used where a model's own support is unknown.
@@ -204,14 +399,17 @@ struct ReasoningConfig {
 
     /// Levels the user may pick for this model, besides Default. Empty means the
     /// model only runs on Default, either because it has no reasoning control or
-    /// because LLMkit cannot send that provider's control yet.
+    /// because VoiceInk cannot send that provider's control yet.
     ///
     /// Adding reasoning for a provider (new providers start on Default only):
     /// 1. Return its levels here, from a `<provider>Levels(for:)` helper with the
     ///    provider's model sets above.
     /// 2. Map a level to request parameters: `getReasoningParameter` and
     ///    `getExtraBodyParameters` for OpenAI-compatible APIs, or a dedicated
-    ///    function like `geminiThinkingLevel(for:level:)` for native APIs.
+    ///    function like `geminiThinkingLevel(for:level:)` for native APIs. When
+    ///    LLMkit can't send the parameter or read the reply, send picked levels
+    ///    through a small in-app client (like `AnthropicMessagesClient`) and keep
+    ///    Default on LLMkit.
     /// 3. Pass the level through in `AIService.performChatCompletion`.
     /// 4. If Default sends a parameter today, describe it in `defaultLevel`.
     static func supportedLevels(
@@ -224,11 +422,15 @@ struct ReasoningConfig {
             .filter { !tooSlow.contains($0) }
     }
 
-    // Levels too slow for dictation in live measurements on 2026-11-17 (median above
-    // ~45 s or max above ~120 s), so they aren't offered for these models.
+    // Levels too slow for dictation in live measurements (median above ~45 s or max above
+    // ~120 s), so they aren't offered for these models. OpenAI and Gemini were measured on
+    // 2026-11-17; Anthropic and Ollama on 2026-11-18. Ollama runs locally, so its numbers
+    // come from one Mac (gpt-oss:20b High: 24-150 s, two runs timed out).
     static let tooSlowLevels: [AIProvider: [String: Set<ReasoningLevel>]] = [
         .openAI: ["gpt-5.4": [.xhigh], "gpt-5.4-mini": [.xhigh]],
         .gemini: ["gemini-4-carbon": [.high], "gemini-4-argon": [.high]],
+        .anthropic: ["claude-sonnet-5": [.max]],
+        .ollama: ["gpt-oss:20b": [.high], "gpt-oss:latest": [.high], "gpt-oss": [.high]],
     ]
 
     private static func providerLevels(
@@ -248,15 +450,13 @@ struct ReasoningConfig {
         case .openRouter:
             return openRouterLevels(for: modelInfo.openRouterModel)
         case .ollama:
-            // Ollama rejects `think: true` for models without the thinking capability.
-            // LLMkit sends `think` as a Bool, so "low"/"medium"/"high" are not available.
-            return modelInfo.ollamaSupportsThinking == false ? [] : [.enabled]
+            return ollamaLevels(for: modelInfo)
         case .custom:
             return openAICompatibleEffortLevels
-        case .anthropic, .mistral:
-            // Need LLMkit support: Anthropic `output_config.effort`, and Mistral's
-            // chunked `content` that holds thinking.
-            return []
+        case .anthropic:
+            return anthropicLevels(for: modelName)
+        case .mistral:
+            return mistralLevels(for: modelName, aliasTargets: modelInfo.mistralAliasTargets)
         case .bedrock:
             // Converse sends no reasoning parameters, so each Bedrock model runs on its
             // own default. Mapping levels needs per-model `additionalModelRequestFields`.
@@ -314,7 +514,17 @@ struct ReasoningConfig {
             }
             return .off
         case .ollama:
+            // Models with named levels (gpt-oss) can't turn thinking off, and `think: false`
+            // didn't run them at their lowest level in live tests: Default took 25-80 s on
+            // gpt-oss:20b and Low 2-4 s. So don't name what Default does for them.
+            if ollamaLevels(for: modelInfo) != [.enabled] {
+                return nil
+            }
             return .off
+        case .anthropic:
+            return anthropicDefaultEffort(for: modelName)
+        case .mistral:
+            return mistralDefaultLevel(for: modelName, aliasTargets: modelInfo.mistralAliasTargets)
         default:
             return getReasoningParameter(for: provider, modelName: modelName)
                 .flatMap(ReasoningLevel.init(effortValue:))
@@ -429,8 +639,29 @@ struct ReasoningConfig {
 
     // MARK: - Ollama
 
-    /// Ollama's `think` value. Default keeps thinking off for low latency.
-    static func ollamaThink(level: ReasoningLevel?, modelName: String, modelInfo: ReasoningModelInfo) -> Bool {
-        effectiveLevel(level, for: .ollama, modelName: modelName, modelInfo: modelInfo) == .enabled
+    // Ollama returns 400 for `think: true` on models without the thinking capability. A
+    // model whose `/api/show` lists named levels takes those instead of an on/off switch.
+    private static func ollamaLevels(for modelInfo: ReasoningModelInfo) -> [ReasoningLevel] {
+        if modelInfo.ollamaSupportsThinking == false {
+            return []
+        }
+        let named = (modelInfo.ollamaThinkingLevels ?? []).compactMap(ReasoningLevel.init(effortValue:))
+        let levels = ReasoningLevel.allCases.filter { $0 != .off && named.contains($0) }
+        return levels.isEmpty ? [.enabled] : levels
+    }
+
+    /// Default keeps `think: false` for low latency.
+    static func ollamaThink(level: ReasoningLevel?, modelName: String, modelInfo: ReasoningModelInfo) -> OllamaThink {
+        switch effectiveLevel(level, for: .ollama, modelName: modelName, modelInfo: modelInfo) {
+        case .enabled:
+            return .enabled(true)
+        case let level?:
+            if let value = level.effortValue {
+                return .level(value)
+            }
+            return .enabled(false)
+        case nil:
+            return .enabled(false)
+        }
     }
 }

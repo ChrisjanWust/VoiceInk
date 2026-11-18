@@ -823,7 +823,7 @@ class AIService: ObservableObject {
         text: String,
         systemPrompt: String,
         model: String? = nil,
-        think: Bool = false,
+        think: OllamaThink = .enabled(false),
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> String {
@@ -882,12 +882,23 @@ class AIService: ObservableObject {
         openRouterModelCatalog.first(where: { $0.id == modelName })
     }
 
+    /// Makes sure a saved Ollama level can be checked against the model's named levels.
+    func loadOllamaThinkingMetadataIfNeeded(for model: String) async {
+        await ollamaService.loadThinkingMetadataIfNeeded(for: model)
+    }
+
     func reasoningModelInfo(for provider: AIProvider, model: String) -> ReasoningModelInfo {
         switch provider {
         case .openRouter:
             return ReasoningModelInfo(openRouterModel: openRouterModelMetadata(for: model))
         case .ollama:
-            return ReasoningModelInfo(ollamaSupportsThinking: ollamaService.thinkingSupport[model])
+            return ReasoningModelInfo(
+                ollamaSupportsThinking: ollamaService.thinkingSupport[model],
+                ollamaThinkingLevels: ollamaService.thinkingLevels[model]
+            )
+        case .mistral:
+            let aliasTargets = LiveModelListStore.shared.aliasTargets(forProviderKey: provider.rawValue)
+            return ReasoningModelInfo(mistralAliasTargets: aliasTargets?[model] ?? [])
         default:
             return ReasoningModelInfo()
         }
