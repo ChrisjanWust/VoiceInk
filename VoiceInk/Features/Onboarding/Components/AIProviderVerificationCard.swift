@@ -32,6 +32,9 @@ struct AIProviderVerificationCard: View {
             providerSummary
 
             if shouldShowAPIKeyEntry {
+                if selectedProvider == .bedrock {
+                    BedrockRegionField(isDisabled: isVerifying)
+                }
                 apiKeyField
                 verificationFooter
             } else {
@@ -429,6 +432,8 @@ fileprivate extension AIProvider {
             return URL(string: "https://openrouter.ai/keys")
         case .cerebras:
             return URL(string: "https://cloud.cerebras.ai/platform")
+        case .bedrock:
+            return URL(string: "https://console.aws.amazon.com/bedrock/home#/api-keys")
         default:
             return nil
         }

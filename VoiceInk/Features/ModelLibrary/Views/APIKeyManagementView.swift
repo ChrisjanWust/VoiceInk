@@ -393,6 +393,7 @@ struct APIKeyManagementView: View {
         case .assemblyAI: return URL(string: "https://www.assemblyai.com/dashboard/api-keys")
         case .openRouter: return URL(string: "https://openrouter.ai/keys")
         case .cerebras: return URL(string: "https://cloud.cerebras.ai/")
+        case .bedrock: return URL(string: "https://console.aws.amazon.com/bedrock/home#/api-keys")
         default: return nil
         }
     }

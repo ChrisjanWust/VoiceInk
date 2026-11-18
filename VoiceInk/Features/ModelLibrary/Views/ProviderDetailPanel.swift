@@ -86,6 +86,12 @@ struct ProviderDetailPanel: View {
     private var apiKeySection: some View {
         ProviderConfigurationGroup(title: "Connection") {
             VStack(alignment: .leading, spacing: 8) {
+                if descriptor.aiProvider == .bedrock {
+                    BedrockRegionField(isDisabled: isVerifying)
+                        .padding(12)
+                        .background(ProviderSurface(cornerRadius: 8))
+                }
+
                 if isConfigured {
                     verifiedAPIKeyRow
                 } else {

@@ -65,6 +65,15 @@ extension AIService {
             }
             result = completion.text
             openRouterCompletion = completion
+        case .bedrock:
+            result = try await bedrockChatCompletion(
+                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                model: resolvedModel,
+                messages: messages,
+                systemPrompt: systemPrompt,
+                timeout: timeout,
+                retryOnTimeout: retryOnTimeout
+            )
         case .custom:
             guard
                 let customConfiguration = CustomAIProviderManager.shared.requestConfiguration(forModel: resolvedModel),
@@ -165,6 +174,53 @@ extension AIService {
             throw EnhancementError.notConfigured
         }
         return key
+    }
+
+    private func bedrockChatCompletion(
+        apiKey: String,
+        model: String,
+        messages: [ChatMessage],
+        systemPrompt: String?,
+        timeout: TimeInterval,
+        retryOnTimeout: Bool
+    ) async throws -> String {
+        // Converse takes the system prompt as its own field, like Anthropic's Messages API.
+        let systemMessages = messages.filter { $0.role == "system" }.map(\.content)
+        let system = systemPrompt ?? (systemMessages.isEmpty ? nil : systemMessages.joined(separator: "\n"))
+        let bedrockMessages = messages.compactMap { message -> BedrockMessage? in
+            switch message.role {
+            case "user":
+                return BedrockMessage(role: .user, text: message.content)
+            case "assistant":
+                return BedrockMessage(role: .assistant, text: message.content)
+            default:
+                return nil
+            }
+        }
+
+        do {
+            let completion = try await BedrockConverseClient.converse(
+                apiKey: apiKey,
+                region: BedrockRegion.current,
+                modelID: model,
+                systemPrompt: system,
+                messages: bedrockMessages,
+                timeout: timeout,
+                retryOnTimeout: retryOnTimeout
+            )
+            return completion.text
+        } catch let error as BedrockError {
+            switch error {
+            case .timeout:
+                throw EnhancementError.timeout
+            case .outputTruncated:
+                throw EnhancementError.outputTruncated
+            case .missingAPIKey:
+                throw EnhancementError.notConfigured
+            default:
+                throw EnhancementError.customError(error.localizedDescription)
+            }
+        }
     }
 
     private func chatPrompt(from messages: [ChatMessage]) -> String {
