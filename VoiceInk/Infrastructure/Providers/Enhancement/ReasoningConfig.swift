@@ -424,8 +424,8 @@ struct ReasoningConfig {
         case .mistral:
             return mistralLevels(for: modelName, aliasTargets: modelInfo.mistralAliasTargets)
         case .bedrock:
-            // From the model's catalog schema or its family's native fields.
-            return BedrockReasoning.levels(for: modelInfo.bedrockModel, modelName: modelName)
+            // Read from the model's live catalog schema; custom IDs stay on Default.
+            return BedrockReasoning.levels(for: modelInfo.bedrockModel)
         default:
             // Transcription-only providers, VoiceInk Refine, Local CLI, and any
             // provider without a mapping yet stay on Default.
@@ -486,7 +486,7 @@ struct ReasoningConfig {
         case .anthropic:
             return anthropicDefaultEffort(for: modelName)
         case .bedrock:
-            return BedrockReasoning.defaultLevel(for: modelInfo.bedrockModel, modelName: modelName)
+            return BedrockReasoning.defaultLevel(for: modelInfo.bedrockModel)
         default:
             return getReasoningParameter(for: provider, modelName: modelName)
                 .flatMap(ReasoningLevel.init(effortValue:))

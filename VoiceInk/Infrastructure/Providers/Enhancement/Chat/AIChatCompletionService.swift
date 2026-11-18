@@ -138,8 +138,7 @@ extension AIService {
                 systemPrompt: systemPrompt,
                 reasoning: BedrockReasoning.fields(
                     for: reasoningLevel,
-                    model: reasoningModelInfo(for: .bedrock, model: resolvedModel).bedrockModel,
-                    modelName: resolvedModel
+                    model: reasoningModelInfo(for: .bedrock, model: resolvedModel).bedrockModel
                 ),
                 timeout: requestTimeout.seconds,
                 retryOnTimeout: requestTimeout.retryOnTimeout

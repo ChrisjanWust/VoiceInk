@@ -157,8 +157,15 @@ enum BedrockModelCatalog {
         minimumTimeouts[foundationModelID(for: modelID)]
     }
 
+    /// `global.xai.grok-4.7` -> `xai.grok-4.7`; base model IDs are returned unchanged.
     static func foundationModelID(for modelID: String) -> String {
-        BedrockReasoningFieldMap.foundationModelID(for: modelID)
+        let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard BedrockErrorDescriber.isInferenceProfileID(trimmed),
+            let dot = trimmed.firstIndex(of: ".")
+        else {
+            return trimmed
+        }
+        return String(trimmed[trimmed.index(after: dot)...])
     }
 
     /// A note for models with a minimum timeout. `nil` for models that answer within the

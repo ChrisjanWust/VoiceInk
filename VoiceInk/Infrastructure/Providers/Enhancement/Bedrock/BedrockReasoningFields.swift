@@ -107,49 +107,37 @@ enum BedrockReasoningFieldMap {
     /// what the request accepts.
     ///
     /// - Parameters:
-    ///   - modelID: a foundation model ID, or an inference profile ID such as `global.…`.
-    ///   - schema: the catalog's `converse.additionalRequestFieldsSchema`, when known.
+    ///   - foundationModelID: the catalog's model ID, such as `anthropic.claude-opus-4-7`.
+    ///   - schema: the catalog's `converse.additionalRequestFieldsSchema`.
+    ///   - maxTokensDefault, maxTokensMaximum: the catalog's output limits.
     static func options(
-        modelID: String,
+        foundationModelID: String,
         schema: String?,
-        maxTokensDefault: Int? = nil,
-        maxTokensMaximum: Int? = nil
+        maxTokensDefault: Int?,
+        maxTokensMaximum: Int?
     ) -> BedrockReasoningOptions? {
-        let foundationID = foundationModelID(for: modelID)
-        let tooSlow = tooSlowEfforts[foundationID] ?? []
-
         let efforts: [String]
         let defaultEffort: String?
         let encoding: BedrockReasoningOptions.Encoding
         if let schemaEnum = SchemaEnum(schema: schema) {
-            efforts = schemaEnum.values
+            let tooSlow = tooSlowSchemaEfforts[foundationModelID] ?? []
+            efforts = schemaEnum.values.filter { !tooSlow.contains($0) }
             defaultEffort = schemaEnum.defaultValue
             encoding = .schemaEnum(path: schemaEnum.path)
-        } else if let family = nativeFamilies[foundationID] {
+        } else if let family = nativeFamilies[foundationModelID] {
             (efforts, defaultEffort, encoding) = family
         } else {
             return nil
         }
 
-        let offered = efforts.filter { !tooSlow.contains($0) }
-        guard !offered.isEmpty else { return nil }
+        guard !efforts.isEmpty else { return nil }
         return BedrockReasoningOptions(
-            efforts: offered,
+            efforts: efforts,
             defaultEffort: defaultEffort,
             encoding: encoding,
             maxTokensDefault: maxTokensDefault,
             maxTokensMaximum: maxTokensMaximum
         )
-    }
-
-    /// `global.xai.grok-4.7` -> `xai.grok-4.7`; foundation model IDs are returned unchanged.
-    static func foundationModelID(for modelID: String) -> String {
-        let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let profilePrefixes: Set<String> = ["global", "us", "us-gov", "eu", "apac", "au", "ca", "jp"]
-        guard let dot = trimmed.firstIndex(of: "."), profilePrefixes.contains(trimmed[..<dot].lowercased()) else {
-            return trimmed
-        }
-        return String(trimmed[trimmed.index(after: dot)...])
     }
 
     // MARK: - Native families
@@ -166,18 +154,21 @@ enum BedrockReasoningFieldMap {
     // reasoning into the text at "medium".
     static let nativeFamilies: [String: (efforts: [String], defaultEffort: String?, encoding: BedrockReasoningOptions.Encoding)] = {
         var families: [String: (efforts: [String], defaultEffort: String?, encoding: BedrockReasoningOptions.Encoding)] = [:]
-        // Claude 4.6 rejects "xhigh"; Fable 5 rejects `thinking.type: disabled`.
-        let adaptive: [String: [String]] = [
-            "anthropic.claude-sonnet-4-6": ["none", "low", "medium", "high", "max"],
-            "anthropic.claude-opus-4-6-v1": ["none", "low", "medium", "high", "max"],
-            "anthropic.claude-opus-4-7": ["none", "low", "medium", "high", "xhigh", "max"],
-            "anthropic.claude-opus-4-8": ["none", "low", "medium", "high", "xhigh", "max"],
-            "anthropic.claude-fable-5": ["low", "medium", "high", "xhigh", "max"],
-            "anthropic.claude-sonnet-5": ["none", "low", "medium", "high", "xhigh", "max"],
-            "anthropic.claude-opus-5": ["none", "low", "medium", "high", "xhigh", "max"],
+        // Claude 4.6 to 4.8 don't think by default, so they need no "none". Claude 5 thinks at
+        // "high" by default (as on Anthropic's own API); Fable 5 rejects `thinking.type:
+        // disabled`. Claude 4.6 rejects "xhigh". "max" is left out where it was too slow:
+        // Opus 4.8 (54 s median) and Sonnet 5 (114 s).
+        let adaptive: [String: (efforts: [String], defaultEffort: String)] = [
+            "anthropic.claude-sonnet-4-6": (["low", "medium", "high", "max"], "none"),
+            "anthropic.claude-opus-4-6-v1": (["low", "medium", "high", "max"], "none"),
+            "anthropic.claude-opus-4-7": (["low", "medium", "high", "xhigh", "max"], "none"),
+            "anthropic.claude-opus-4-8": (["low", "medium", "high", "xhigh"], "none"),
+            "anthropic.claude-fable-5": (["low", "medium", "high", "xhigh", "max"], "high"),
+            "anthropic.claude-sonnet-5": (["none", "low", "medium", "high", "xhigh"], "high"),
+            "anthropic.claude-opus-5": (["none", "low", "medium", "high", "xhigh", "max"], "high"),
         ]
-        for (model, efforts) in adaptive {
-            families[model] = (efforts, nil, .anthropicAdaptive)
+        for (model, row) in adaptive {
+            families[model] = (row.efforts, row.defaultEffort, .anthropicAdaptive)
         }
         // Reject adaptive thinking, and don't think by default.
         for model in ["anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-opus-4-5-20251101-v1:0"] {
@@ -196,13 +187,11 @@ enum BedrockReasoningFieldMap {
         return families
     }()
 
-    // Efforts too slow for dictation in live tests (median above ~45 s or max above ~120 s,
-    // the rule in `ReasoningConfig.tooSlowLevels`): Claude Opus 5.5 "max" (65 s median),
-    // Opus 4.8 "max" (54 s) and Sonnet 5 "max" (114 s).
-    static let tooSlowEfforts: [String: Set<String>] = [
-        "anthropic.claude-opus-5-5": ["max"],
-        "anthropic.claude-opus-4-8": ["max"],
-        "anthropic.claude-sonnet-5": ["max"],
+    // Schema-listed efforts too slow for dictation in live tests (median above ~45 s or max
+    // above ~120 s, the rule in `ReasoningConfig.tooSlowLevels`): Claude Opus 5.5 "max" took a
+    // 65 s median.
+    static let tooSlowSchemaEfforts: [String: Set<String>] = [
+        "anthropic.claude-opus-5-5": ["max"]
     ]
 
     // MARK: - Schema enums
