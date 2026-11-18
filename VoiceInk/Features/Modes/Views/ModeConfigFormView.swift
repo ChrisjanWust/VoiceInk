@@ -483,6 +483,12 @@ struct ModeConfigFormView: View {
                         Task { await aiService.fetchOpenRouterModels() }
                     }
                     .help("Refresh models")
+                } else if provider.fetchesLiveModelList {
+                    Button("Refresh Models") {
+                        Task { await aiService.fetchLiveModels(for: provider) }
+                    }
+                    .disabled(aiService.isRefreshingLiveModels(for: provider))
+                    .help("Load the latest models from the provider")
                 }
             }
         }

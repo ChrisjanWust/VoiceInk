@@ -16,8 +16,10 @@ extension AIService {
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> AIChatCompletionResult {
-        let resolvedModel = CerebrasModelMigration.resolvedModel(
-            modelName?.isEmpty == false ? modelName! : selectedModel(for: provider),
+        // Each migration only changes its own provider's retired model IDs.
+        let requestedModel = modelName?.isEmpty == false ? modelName! : selectedModel(for: provider)
+        let resolvedModel = GeminiModelMigration.resolvedModel(
+            CerebrasModelMigration.resolvedModel(requestedModel, for: provider),
             for: provider
         )
         let reasoningLevel = EnhancementReasoningSettings.savedLevel(for: provider, model: resolvedModel)

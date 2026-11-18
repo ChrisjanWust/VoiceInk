@@ -26,6 +26,9 @@ struct ReasoningConfig {
         "gemini-3.8-flash",
         "gemini-3.7-flash",
         "gemini-3.1-pro-preview",
+        "gemini-4-carbon",
+        "gemini-4-argon",
+        "gemini-4-hydrogen",
     ]
 
     // These models support "minimal", optimized for low-latency instruction following.
@@ -34,6 +37,8 @@ struct ReasoningConfig {
         "gemini-3.5-flash-lite",
         "gemini-3.5-flash",
         "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
     ]
 
     static func geminiThinkingLevel(for modelName: String, level: ReasoningLevel? = nil) -> GeminiThinkingLevel? {
@@ -82,6 +87,8 @@ struct ReasoningConfig {
         "gpt-5.4",
         "gpt-5.4-mini",
         "gpt-5.4-nano",
+        "gpt-6.1-terra",
+        "gpt-5.2",
     ]
 
     // These OpenAI models reject "none" and reject `temperature: 0.3` even without
@@ -92,6 +99,11 @@ struct ReasoningConfig {
         "gpt-6.1-sol",
         "gpt-6-astra",
     ]
+
+    /// Whether VoiceInk's Default request works for this OpenAI model.
+    static func isOpenAIDefaultRequestSupported(_ modelName: String) -> Bool {
+        openAINoneReasoningModels.contains(modelName) || openAIEffortRequiredModels.contains(modelName)
+    }
 
     // Non-reasoning models reject `reasoning_effort`.
     static let openAINonReasoningModelPrefixes = ["gpt-4", "gpt-3.5", "chatgpt-4o"]

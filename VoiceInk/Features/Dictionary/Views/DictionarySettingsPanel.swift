@@ -357,7 +357,7 @@ struct DictionarySettingsPanel: View {
                 Text("Connect this provider in AI Models to resume Auto-Learn review.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if provider == .openRouter || provider == .ollama {
+            if provider == .openRouter || provider == .ollama || provider.fetchesLiveModelList {
                 Button("Refresh Models") {
                     Task { await refreshReviewModels(for: provider) }
                 }
@@ -387,6 +387,7 @@ struct DictionarySettingsPanel: View {
         switch provider {
         case .ollama: _ = await reviewerAIService.refreshOllamaAvailability()
         case .openRouter: await reviewerAIService.fetchOpenRouterModels()
+        case .gemini, .openAI: await reviewerAIService.fetchLiveModels(for: provider)
         default: break
         }
     }
