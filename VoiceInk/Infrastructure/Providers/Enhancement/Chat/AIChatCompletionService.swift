@@ -42,7 +42,11 @@ extension AIService {
         )
 
         if provider == .mistral,
-            let reasoningEffort = ReasoningConfig.mistralReasoningEffort(for: resolvedModel, level: reasoningLevel)
+            let reasoningEffort = ReasoningConfig.mistralReasoningEffort(
+                for: resolvedModel,
+                level: reasoningLevel,
+                modelInfo: reasoningModelInfo(for: provider, model: resolvedModel)
+            )
         {
             // Mistral returns reasoning as chunked `content`, which LLMkit can't decode, so a
             // picked level uses the in-app client. Default stays on the LLMkit path below.

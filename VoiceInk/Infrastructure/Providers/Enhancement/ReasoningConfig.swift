@@ -11,6 +11,10 @@ struct ReasoningModelInfo {
     /// for gpt-oss, from `/api/show`'s `thinking.values`. Empty for models with only an
     /// on/off switch, and `nil` when unknown.
     var ollamaThinkingLevels: [String]? = nil
+    /// The other IDs of a Mistral model, from the live list's aliases. For
+    /// `mistral-small-latest` this is the dated ID, such as `mistral-small-2603`. Empty when
+    /// unknown (offline, no key, or the built-in list).
+    var mistralAliasTargets: [String] = []
 }
 
 /// Reasoning parameters for enhancement requests.
@@ -326,8 +330,9 @@ struct ReasoningConfig {
 
     // From Mistral's reasoning docs (2026-11-18), not live-tested: no Mistral key was
     // available. `reasoning_effort` is the only control. Only the model IDs and values the
-    // docs name are offered. Any other ID, including the `-latest` aliases (the docs don't
-    // say which model they point to), stays on Default.
+    // docs name are offered. A `-latest` alias gets the levels of the dated ID it points to
+    // in the live list (`ReasoningModelInfo.mistralAliasTargets`). Without that mapping, and
+    // for any other ID, the model stays on Default.
 
     // Mistral Small 4 and Medium 3.5 take "none" or "high".
     static let mistralNoneOrHighModels: Set<String> = [
@@ -347,7 +352,17 @@ struct ReasoningConfig {
         "zai-glm-5-3-flash",
     ]
 
-    private static func mistralLevels(for modelName: String) -> [ReasoningLevel] {
+    /// The ID the Mistral docs name for this model: the ID itself, or the first dated ID a
+    /// live-list alias points to that has documented levels. Requests still send `modelName`.
+    private static func mistralDocumentedModel(for modelName: String, aliasTargets: [String]) -> String {
+        ([modelName] + aliasTargets).first { !mistralDocumentedLevels(for: $0).isEmpty } ?? modelName
+    }
+
+    private static func mistralLevels(for modelName: String, aliasTargets: [String]) -> [ReasoningLevel] {
+        mistralDocumentedLevels(for: mistralDocumentedModel(for: modelName, aliasTargets: aliasTargets))
+    }
+
+    private static func mistralDocumentedLevels(for modelName: String) -> [ReasoningLevel] {
         if mistralNoneOrHighModels.contains(modelName) {
             return [.off, .high]
         }
@@ -360,14 +375,19 @@ struct ReasoningConfig {
         return []
     }
 
-    private static func mistralDefaultLevel(for modelName: String) -> ReasoningLevel? {
-        mistralLowToHighModels.contains(modelName) ? .high : nil
+    private static func mistralDefaultLevel(for modelName: String, aliasTargets: [String]) -> ReasoningLevel? {
+        mistralLowToHighModels.contains(mistralDocumentedModel(for: modelName, aliasTargets: aliasTargets))
+            ? .high : nil
     }
 
     /// The `reasoning_effort` for a picked level, or `nil` for Default, which LLMkit sends
     /// without one.
-    static func mistralReasoningEffort(for modelName: String, level: ReasoningLevel?) -> String? {
-        effectiveLevel(level, for: .mistral, modelName: modelName)?.effortValue
+    static func mistralReasoningEffort(
+        for modelName: String,
+        level: ReasoningLevel?,
+        modelInfo: ReasoningModelInfo = ReasoningModelInfo()
+    ) -> String? {
+        effectiveLevel(level, for: .mistral, modelName: modelName, modelInfo: modelInfo)?.effortValue
     }
 
     // MARK: - Shared
@@ -436,7 +456,7 @@ struct ReasoningConfig {
         case .anthropic:
             return anthropicLevels(for: modelName)
         case .mistral:
-            return mistralLevels(for: modelName)
+            return mistralLevels(for: modelName, aliasTargets: modelInfo.mistralAliasTargets)
         case .bedrock:
             // Converse sends no reasoning parameters, so each Bedrock model runs on its
             // own default. Mapping levels needs per-model `additionalModelRequestFields`.
@@ -501,7 +521,7 @@ struct ReasoningConfig {
         case .anthropic:
             return anthropicDefaultEffort(for: modelName)
         case .mistral:
-            return mistralDefaultLevel(for: modelName)
+            return mistralDefaultLevel(for: modelName, aliasTargets: modelInfo.mistralAliasTargets)
         default:
             return getReasoningParameter(for: provider, modelName: modelName)
                 .flatMap(ReasoningLevel.init(effortValue:))

@@ -296,9 +296,37 @@ enum ProviderModelCatalog {
         var request = URLRequest(url: mistralModelsEndpoint)
         request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
 
-        let ids = try mistralEnhancementModelIDs(from: try await perform(request, timeout: timeout))
+        let data = try await perform(request, timeout: timeout)
+        let ids = try mistralEnhancementModelIDs(from: data)
         guard !ids.isEmpty else { throw CatalogError.noUsableModels }
+        LiveModelListStore.shared.saveAliasTargets(
+            try mistralAliasTargets(from: data),
+            forProviderKey: AIProvider.mistral.rawValue
+        )
         return ids
+    }
+
+    /// Maps each Mistral model ID to the other IDs of the same model, leaving out `-latest`
+    /// aliases, for example `mistral-small-latest` → `["mistral-small-2603"]`. A model's
+    /// cards share a `name` and list each other in `aliases`. The live list shows the
+    /// `-latest` alias, and this lets `ReasoningConfig` find the dated ID that the reasoning
+    /// docs name.
+    static func mistralAliasTargets(from data: Data) throws -> [String: [String]] {
+        var groups: [String: Set<String>] = [:]
+        for model in try decode(MistralModelList.self, from: data).data {
+            groups[model.name ?? model.id, default: []].formUnion([model.id] + (model.aliases ?? []))
+        }
+
+        var targets: [String: [String]] = [:]
+        for members in groups.values {
+            for id in members {
+                let others = members.filter { $0 != id && !$0.hasSuffix("-latest") }.sorted()
+                if !others.isEmpty {
+                    targets[id] = others
+                }
+            }
+        }
+        return targets
     }
 
     /// Keeps the chat models from Mistral's capability flags, and lists each model once.
@@ -518,6 +546,7 @@ final class LiveModelListStore: @unchecked Sendable {
     private let lock = NSLock()
     private let defaults = UserDefaults.standard
     private var lists: [String: [String]] = [:]
+    private var aliasTargets: [String: [String: [String]]] = [:]
     private var inFlight: [String: Task<[String], Error>] = [:]
 
     private init() {}
@@ -528,6 +557,31 @@ final class LiveModelListStore: @unchecked Sendable {
 
     private static func fetchedAtKey(_ providerKey: String) -> String {
         "\(providerKey)LiveEnhancementModelsFetchedAt"
+    }
+
+    private static func aliasTargetsKey(_ providerKey: String) -> String {
+        "\(providerKey)LiveEnhancementModelAliases"
+    }
+
+    /// The other IDs of each model in the last fetched list (Mistral only), or `nil` when
+    /// none was fetched.
+    func aliasTargets(forProviderKey providerKey: String) -> [String: [String]]? {
+        lock.withLock {
+            if let cached = aliasTargets[providerKey] { return cached }
+            guard let saved = defaults.dictionary(forKey: Self.aliasTargetsKey(providerKey)) as? [String: [String]]
+            else {
+                return nil
+            }
+            aliasTargets[providerKey] = saved
+            return saved
+        }
+    }
+
+    func saveAliasTargets(_ targets: [String: [String]], forProviderKey providerKey: String) {
+        lock.withLock {
+            aliasTargets[providerKey] = targets
+            defaults.set(targets, forKey: Self.aliasTargetsKey(providerKey))
+        }
     }
 
     func models(forProviderKey providerKey: String) -> [String]? {
@@ -566,7 +620,9 @@ final class LiveModelListStore: @unchecked Sendable {
         let existed = models(forProviderKey: providerKey) != nil
         lock.withLock {
             lists.removeValue(forKey: providerKey)
+            aliasTargets.removeValue(forKey: providerKey)
             defaults.removeObject(forKey: Self.modelsKey(providerKey))
+            defaults.removeObject(forKey: Self.aliasTargetsKey(providerKey))
             defaults.removeObject(forKey: Self.fetchedAtKey(providerKey))
         }
         if existed {
@@ -669,6 +725,7 @@ private struct MistralModelList: Decodable {
 private struct MistralModel: Decodable {
     let id: String
     let name: String?
+    let aliases: [String]?
     let created: Int?
     let capabilities: MistralModelCapabilities?
     let deprecation: String?

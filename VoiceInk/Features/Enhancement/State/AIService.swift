@@ -861,6 +861,9 @@ class AIService: ObservableObject {
                 ollamaSupportsThinking: ollamaService.thinkingSupport[model],
                 ollamaThinkingLevels: ollamaService.thinkingLevels[model]
             )
+        case .mistral:
+            let aliasTargets = LiveModelListStore.shared.aliasTargets(forProviderKey: provider.rawValue)
+            return ReasoningModelInfo(mistralAliasTargets: aliasTargets?[model] ?? [])
         default:
             return ReasoningModelInfo()
         }
