@@ -3,7 +3,7 @@ import Foundation
 // Maps a reasoning effort onto the Converse request fields each Amazon Bedrock model takes.
 //
 // This file only uses Foundation, so it can move with the Bedrock client into a standalone
-// chat library: callers pass a model ID and its catalog data, and get back JSON fields.
+// chat library. Efforts are the usual strings: "none", "low", "medium", "high", "xhigh", "max".
 
 /// A JSON value for Converse `additionalModelRequestFields`.
 indirect enum BedrockJSONValue: Encodable, Sendable, Equatable {
@@ -18,28 +18,6 @@ indirect enum BedrockJSONValue: Encodable, Sendable, Equatable {
         case .int(let value): try container.encode(value)
         case .object(let value): try container.encode(value)
         }
-    }
-}
-
-/// A reasoning effort, in increasing order. `off` turns thinking off where the model allows it.
-enum BedrockReasoningEffort: String, CaseIterable, Sendable {
-    case off
-    case minimal
-    case low
-    case medium
-    case high
-    case xhigh
-    case max
-
-    /// The effort string most APIs use (`none` for `off`).
-    var wireValue: String {
-        self == .off ? "none" : rawValue
-    }
-
-    init?(wireValue: String) {
-        let value = wireValue.lowercased()
-        guard let effort = Self.allCases.first(where: { $0.wireValue == value }) else { return nil }
-        self = effort
     }
 }
 
@@ -58,62 +36,59 @@ struct BedrockReasoningOptions: Sendable, Equatable {
         /// (OpenAI, xAI, Moonshot K3.1) or `output_config.effort` (Claude 5.5, Fable 5.1+).
         case schemaEnum(path: [String])
         /// Claude 4.6 to 5: `thinking.type: adaptive` with `output_config.effort`, or
-        /// `thinking.type: disabled` for off.
+        /// `thinking.type: disabled` for "none".
         case anthropicAdaptive
-        /// Claude 4.5: `thinking.type: enabled` with a `budget_tokens` per effort.
-        case anthropicBudget([BedrockReasoningEffort: Int])
+        /// Claude 4.5: `thinking.type: enabled` with `budget_tokens`.
+        case anthropicBudget
         /// Nova 2: `reasoningConfig.type: enabled` with `maxReasoningEffort`.
         case novaEffort
-        /// A top-level OpenAI-style `reasoning_effort` string (gpt-oss, DeepSeek, GLM, Kimi
-        /// K2.5, Nemotron 3).
+        /// A top-level `reasoning_effort` string (gpt-oss, DeepSeek, GLM, Nemotron 3).
         case reasoningEffort
     }
 
-    let efforts: [BedrockReasoningEffort]
+    let efforts: [String]
     /// What the model does with no reasoning fields, when known, for display.
-    let defaultEffort: BedrockReasoningEffort?
+    let defaultEffort: String?
     let encoding: Encoding
     let maxTokensDefault: Int?
     let maxTokensMaximum: Int?
 
-    /// The fields to send, or `nil` when the model doesn't offer this effort.
-    func fields(for effort: BedrockReasoningEffort) -> BedrockReasoningFields? {
-        guard efforts.contains(effort) else { return nil }
-        let request: [String: BedrockJSONValue]
-        switch encoding {
-        case .schemaEnum(let path):
-            request = Self.nested(path, .string(effort.wireValue))
-        case .anthropicAdaptive:
-            request = effort == .off
-                ? ["thinking": .object(["type": .string("disabled")])]
-                : [
-                    "thinking": .object(["type": .string("adaptive")]),
-                    "output_config": .object(["effort": .string(effort.rawValue)]),
-                ]
-        case .anthropicBudget(let budgets):
-            if effort == .off {
-                request = ["thinking": .object(["type": .string("disabled")])]
-            } else {
-                guard let budget = budgets[effort] else { return nil }
-                request = ["thinking": .object(["type": .string("enabled"), "budget_tokens": .int(budget)])]
-            }
-        case .novaEffort:
-            request = effort == .off
-                ? ["reasoningConfig": .object(["type": .string("disabled")])]
-                : ["reasoningConfig": .object(["type": .string("enabled"), "maxReasoningEffort": .string(effort.rawValue)])]
-        case .reasoningEffort:
-            request = ["reasoning_effort": .string(effort.wireValue)]
-        }
-        return BedrockReasoningFields(additionalModelRequestFields: request, maxTokens: outputLimit(for: effort))
-    }
+    /// Claude 4.5's thinking budget for each effort.
+    static let anthropicBudgets = ["low": 1_024, "medium": 4_096, "high": 16_384]
 
-    /// Room for thinking, which can fill a small default output limit (Claude and gpt-oss
+    /// Room for thinking, which can fill a small default output limit (Claude 4.7 and later
     /// default to 4,096 tokens) before the answer starts.
     static let thinkingOutputLimit = 32_000
 
-    private func outputLimit(for effort: BedrockReasoningEffort) -> Int? {
-        guard effort != .off, let maxTokensDefault, maxTokensDefault < Self.thinkingOutputLimit else { return nil }
-        return min(Self.thinkingOutputLimit, maxTokensMaximum ?? Self.thinkingOutputLimit)
+    /// The fields to send, or `nil` when the model doesn't offer this effort.
+    func fields(for effort: String) -> BedrockReasoningFields? {
+        guard efforts.contains(effort) else { return nil }
+        let off = effort == "none"
+        let request: [String: BedrockJSONValue]
+        switch encoding {
+        case .schemaEnum(let path):
+            request = Self.nested(path, .string(effort))
+        case .anthropicAdaptive:
+            request = off
+                ? ["thinking": .object(["type": .string("disabled")])]
+                : [
+                    "thinking": .object(["type": .string("adaptive")]),
+                    "output_config": .object(["effort": .string(effort)]),
+                ]
+        case .anthropicBudget:
+            guard let budget = Self.anthropicBudgets[effort] else { return nil }
+            request = ["thinking": .object(["type": .string("enabled"), "budget_tokens": .int(budget)])]
+        case .novaEffort:
+            request = ["reasoningConfig": .object(["type": .string("enabled"), "maxReasoningEffort": .string(effort)])]
+        case .reasoningEffort:
+            request = ["reasoning_effort": .string(effort)]
+        }
+
+        var maxTokens: Int?
+        if !off, let maxTokensDefault, maxTokensDefault < Self.thinkingOutputLimit {
+            maxTokens = min(Self.thinkingOutputLimit, maxTokensMaximum ?? Self.thinkingOutputLimit)
+        }
+        return BedrockReasoningFields(additionalModelRequestFields: request, maxTokens: maxTokens)
     }
 
     private static func nested(_ path: [String], _ value: BedrockJSONValue) -> [String: BedrockJSONValue] {
@@ -127,12 +102,13 @@ enum BedrockReasoningFieldMap {
     /// The reasoning options for a model, or `nil` when it has no reasoning control VoiceInk
     /// can send.
     ///
+    /// Models whose catalog schema lists a `reasoning_config` or `output_config.effort` enum
+    /// use it. Others use `nativeFamilies`, because their schema's `reasoningConfig` is not
+    /// what the request accepts.
+    ///
     /// - Parameters:
     ///   - modelID: a foundation model ID, or an inference profile ID such as `global.…`.
     ///   - schema: the catalog's `converse.additionalRequestFieldsSchema`, when known.
-    ///     Models that list a `reasoning_config` or `output_config.effort` enum use it.
-    ///     Others use the native fields in `nativeFamilies`, because their schema's
-    ///     `reasoningConfig` is not what the request accepts.
     static func options(
         modelID: String,
         schema: String?,
@@ -142,27 +118,25 @@ enum BedrockReasoningFieldMap {
         let foundationID = foundationModelID(for: modelID)
         let tooSlow = tooSlowEfforts[foundationID] ?? []
 
+        let efforts: [String]
+        let defaultEffort: String?
+        let encoding: BedrockReasoningOptions.Encoding
         if let schemaEnum = SchemaEnum(schema: schema) {
-            let efforts = BedrockReasoningEffort.allCases.filter {
-                schemaEnum.values.contains($0.wireValue) && !tooSlow.contains($0)
-            }
-            guard !efforts.isEmpty else { return nil }
-            return BedrockReasoningOptions(
-                efforts: efforts,
-                defaultEffort: schemaEnum.defaultValue.flatMap(BedrockReasoningEffort.init(wireValue:)),
-                encoding: .schemaEnum(path: schemaEnum.path),
-                maxTokensDefault: maxTokensDefault,
-                maxTokensMaximum: maxTokensMaximum
-            )
+            efforts = schemaEnum.values
+            defaultEffort = schemaEnum.defaultValue
+            encoding = .schemaEnum(path: schemaEnum.path)
+        } else if let family = nativeFamilies[foundationID] {
+            (efforts, defaultEffort, encoding) = family
+        } else {
+            return nil
         }
 
-        guard let family = nativeFamilies[foundationID] else { return nil }
-        let efforts = family.efforts.filter { !tooSlow.contains($0) }
-        guard !efforts.isEmpty else { return nil }
+        let offered = efforts.filter { !tooSlow.contains($0) }
+        guard !offered.isEmpty else { return nil }
         return BedrockReasoningOptions(
-            efforts: efforts,
-            defaultEffort: family.defaultEffort,
-            encoding: family.encoding,
+            efforts: offered,
+            defaultEffort: defaultEffort,
+            encoding: encoding,
             maxTokensDefault: maxTokensDefault,
             maxTokensMaximum: maxTokensMaximum
         )
@@ -172,9 +146,7 @@ enum BedrockReasoningFieldMap {
     static func foundationModelID(for modelID: String) -> String {
         let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         let profilePrefixes: Set<String> = ["global", "us", "us-gov", "eu", "apac", "au", "ca", "jp"]
-        guard let dot = trimmed.firstIndex(of: "."),
-            profilePrefixes.contains(trimmed[..<dot].lowercased())
-        else {
+        guard let dot = trimmed.firstIndex(of: "."), profilePrefixes.contains(trimmed[..<dot].lowercased()) else {
             return trimmed
         }
         return String(trimmed[trimmed.index(after: dot)...])
@@ -182,66 +154,55 @@ enum BedrockReasoningFieldMap {
 
     // MARK: - Native families
 
-    struct Family {
-        let efforts: [BedrockReasoningEffort]
-        let defaultEffort: BedrockReasoningEffort?
-        let encoding: BedrockReasoningOptions.Encoding
-    }
-
     // Models whose catalog schema doesn't describe their reasoning field, with the native
-    // field each family takes. Every effort here returned clean text in live tests on
-    // 2026-11-18 (us-east-2, VoiceInk's Default prompt, 3 runs each); efforts that were
-    // rejected, changed nothing, leaked reasoning into the text or were too slow are left out.
-    static let nativeFamilies: [String: Family] = {
-        // `thinking.type: adaptive` with `output_config.effort`. Claude 4.6 rejects xhigh.
-        let adaptive: [String: [BedrockReasoningEffort]] = [
-            "anthropic.claude-sonnet-4-6": [.off, .low, .medium, .high, .max],
-            "anthropic.claude-opus-4-6-v1": [.off, .low, .medium, .high, .max],
-            "anthropic.claude-opus-4-7": [.off, .low, .medium, .high, .xhigh, .max],
-            "anthropic.claude-opus-4-8": [.off, .low, .medium, .high, .xhigh, .max],
-            // Rejects `thinking.type: disabled`.
-            "anthropic.claude-fable-5": [.low, .medium, .high, .xhigh, .max],
-            "anthropic.claude-sonnet-5": [.off, .low, .medium, .high, .xhigh, .max],
-            "anthropic.claude-opus-5": [.off, .low, .medium, .high, .xhigh, .max],
+    // field each takes. Every effort here returned clean text in live tests on 2026-11-18
+    // (us-east-2, VoiceInk's Default prompt, 3 runs each). Efforts that were rejected, changed
+    // nothing, leaked reasoning into the text or were too slow are left out.
+    //
+    // No working control, so not listed: Gemma 3 and Voxtral Small don't reason; MiniMax M2.5
+    // reasons the same with every field tried; Qwen3 "high" ran past 150 s and Qwen3 VL wrote
+    // its reasoning into the text; Kimi K2.5 "high" took a 66 s median and GLM 5 "high" a 47 s
+    // median; DeepSeek V3.2 and Nemotron Nano 3 added a preamble at "high", and Nano 3 leaked
+    // reasoning into the text at "medium".
+    static let nativeFamilies: [String: (efforts: [String], defaultEffort: String?, encoding: BedrockReasoningOptions.Encoding)] = {
+        var families: [String: (efforts: [String], defaultEffort: String?, encoding: BedrockReasoningOptions.Encoding)] = [:]
+        // Claude 4.6 rejects "xhigh"; Fable 5 rejects `thinking.type: disabled`.
+        let adaptive: [String: [String]] = [
+            "anthropic.claude-sonnet-4-6": ["none", "low", "medium", "high", "max"],
+            "anthropic.claude-opus-4-6-v1": ["none", "low", "medium", "high", "max"],
+            "anthropic.claude-opus-4-7": ["none", "low", "medium", "high", "xhigh", "max"],
+            "anthropic.claude-opus-4-8": ["none", "low", "medium", "high", "xhigh", "max"],
+            "anthropic.claude-fable-5": ["low", "medium", "high", "xhigh", "max"],
+            "anthropic.claude-sonnet-5": ["none", "low", "medium", "high", "xhigh", "max"],
+            "anthropic.claude-opus-5": ["none", "low", "medium", "high", "xhigh", "max"],
         ]
-        // Reject adaptive thinking and take a thinking budget instead. They don't think by default.
-        let budgets: [BedrockReasoningEffort: Int] = [.low: 1_024, .medium: 4_096, .high: 16_384]
-        let budgetModels = ["anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-opus-4-5-20251101-v1:0"]
-        // gpt-oss reasons at OpenAI's default, medium, unless told otherwise.
-        let gptOSS = ["openai.gpt-oss-120b-1:0", "openai.gpt-oss-20b-1:0", "openai.gpt-oss-safeguard-120b", "openai.gpt-oss-safeguard-20b"]
-        // Only `high` turns reasoning on; `low` and `medium` answered exactly like Default.
-        let highOnly = ["deepseek.v3.2", "deepseek.v3-v1:0", "zai.glm-5", "zai.glm-4.7", "zai.glm-4.7-flash", "nvidia.nemotron-super-3-120b"]
-
-        var families: [String: Family] = [:]
         for (model, efforts) in adaptive {
-            families[model] = Family(efforts: efforts, defaultEffort: nil, encoding: .anthropicAdaptive)
+            families[model] = (efforts, nil, .anthropicAdaptive)
         }
-        for model in budgetModels {
-            families[model] = Family(efforts: [.low, .medium, .high], defaultEffort: .off, encoding: .anthropicBudget(budgets))
+        // Reject adaptive thinking, and don't think by default.
+        for model in ["anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-opus-4-5-20251101-v1:0"] {
+            families[model] = (["low", "medium", "high"], "none", .anthropicBudget)
         }
-        // `reasoningConfig.type: enabled` with `maxReasoningEffort`. Off by default.
-        families["amazon.nova-2-lite-v1:0"] = Family(efforts: [.low, .medium], defaultEffort: .off, encoding: .novaEffort)
-        for model in gptOSS {
-            families[model] = Family(efforts: [.low, .medium, .high], defaultEffort: .medium, encoding: .reasoningEffort)
+        // Off by default. "medium" took 31-65 s and "high" 114 s.
+        families["amazon.nova-2-lite-v1:0"] = (["low"], "none", .novaEffort)
+        // gpt-oss reasons at OpenAI's default, "medium", unless told otherwise.
+        for model in ["openai.gpt-oss-120b-1:0", "openai.gpt-oss-20b-1:0", "openai.gpt-oss-safeguard-120b", "openai.gpt-oss-safeguard-20b"] {
+            families[model] = (["low", "medium", "high"], "medium", .reasoningEffort)
         }
-        for model in highOnly {
-            families[model] = Family(efforts: [.high], defaultEffort: .off, encoding: .reasoningEffort)
+        // Only "high" turns reasoning on; "low" and "medium" answered exactly like Default.
+        for model in ["deepseek.v3-v1:0", "zai.glm-4.7", "zai.glm-4.7-flash", "nvidia.nemotron-super-3-120b"] {
+            families[model] = (["high"], "none", .reasoningEffort)
         }
-        // No working control: Gemma 3 and Voxtral Small don't reason; MiniMax M2.5 reasons the
-        // same with every field tried; Qwen3 `high` ran past 150 s and Qwen3 VL wrote its
-        // reasoning into the text; Kimi K2.5 `high` took a 66 s median; Nemotron Nano 3 leaked
-        // reasoning into the text at medium and added a preamble at high.
         return families
     }()
 
-    // Efforts too slow for dictation in live measurements (median above ~45 s or max above
-    // ~120 s, the rule in `ReasoningConfig.tooSlowLevels`), keyed by foundation model ID:
-    // Claude Opus 5.5 max (65 s median), Opus 4.8 max (54 s), Sonnet 5 max (114 s) and
-    // Nova 2 Lite high (114 s).
-    static let tooSlowEfforts: [String: Set<BedrockReasoningEffort>] = [
-        "anthropic.claude-opus-5-5": [.max],
-        "anthropic.claude-opus-4-8": [.max],
-        "anthropic.claude-sonnet-5": [.max],
+    // Efforts too slow for dictation in live tests (median above ~45 s or max above ~120 s,
+    // the rule in `ReasoningConfig.tooSlowLevels`): Claude Opus 5.5 "max" (65 s median),
+    // Opus 4.8 "max" (54 s) and Sonnet 5 "max" (114 s).
+    static let tooSlowEfforts: [String: Set<String>] = [
+        "anthropic.claude-opus-5-5": ["max"],
+        "anthropic.claude-opus-4-8": ["max"],
+        "anthropic.claude-sonnet-5": ["max"],
     ]
 
     // MARK: - Schema enums
@@ -276,7 +237,7 @@ enum BedrockReasoningFieldMap {
             else {
                 return nil
             }
-            return (values.map { $0.lowercased() }, (node["default"] as? String)?.lowercased())
+            return (values, node["default"] as? String)
         }
     }
 }

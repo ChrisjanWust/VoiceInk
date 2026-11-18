@@ -958,10 +958,19 @@ class AIService: ObservableObject {
         }
         guard !refreshingLiveModelProviders.contains(provider) else { return nil }
         refreshingLiveModelProviders.insert(provider)
-        defer { refreshingLiveModelProviders.remove(provider) }
-
         // Bedrock lists differ per Region, so a fetch for one Region must not serve another.
         let bedrockRegion = BedrockRegion.current
+        defer {
+            refreshingLiveModelProviders.remove(provider)
+            if provider == .bedrock, BedrockRegion.current != bedrockRegion {
+                // The Region changed mid-fetch, and its own fetch was skipped while this one
+                // ran. Fetch again, whether this one succeeded or failed.
+                Task { @MainActor [weak self] in
+                    _ = await self?.fetchLiveModels(for: provider)
+                }
+            }
+        }
+
         let requestScope = provider == .bedrock ? "\(apiKey)\n\(bedrockRegion)" : apiKey
 
         do {
@@ -986,21 +995,12 @@ class AIService: ObservableObject {
 
             // The key may have been removed or replaced while the request was in flight.
             guard APIKeyManager.shared.getAPIKey(forProvider: provider.rawValue) == apiKey else { return nil }
-            guard provider != .bedrock || BedrockRegion.current == bedrockRegion else {
-                // The Region changed mid-fetch, and its own fetch was skipped while this one ran.
-                // Fetch again once this call returns and clears the refreshing flag.
-                Task { @MainActor [weak self] in
-                    _ = await self?.fetchLiveModels(for: provider)
-                }
-                return nil
-            }
+            // A list for a Region that's no longer selected; the deferred fetch replaces it.
+            guard provider != .bedrock || BedrockRegion.current == bedrockRegion else { return nil }
 
             let models = orderedLiveModels(usableLiveModels(fetched, for: provider), for: provider)
             guard !models.isEmpty else {
                 return ProviderModelCatalog.CatalogError.noUsableModels.localizedDescription
-            }
-            if provider == .bedrock {
-                BedrockModelDetailsStore.shared.commitStaged(region: bedrockRegion, apiKey: apiKey)
             }
             if LiveModelListStore.shared.save(models, forProviderKey: provider.rawValue) {
                 NotificationCenter.default.post(name: .AppSettingsDidChange, object: nil)

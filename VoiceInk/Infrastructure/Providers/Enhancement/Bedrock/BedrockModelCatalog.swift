@@ -14,9 +14,6 @@ struct BedrockModelInfo: Codable, Sendable, Equatable {
     /// `converse.additionalRequestFieldsSchema`: a JSON string describing the extra request
     /// fields the model accepts, including its reasoning control. `nil` when not listed.
     let additionalRequestFieldsSchema: String?
-    /// `converse.reasoningSupported.embedded`: whether the model writes its reasoning into the
-    /// text itself rather than a separate content block. `nil` when not listed.
-    let embeddedReasoning: Bool?
     /// `converse.maxTokensDefault` and `maxTokensMaximum`: the default and largest output limits.
     let maxTokensDefault: Int?
     let maxTokensMaximum: Int?
@@ -38,12 +35,12 @@ enum BedrockModelCatalog {
         "https://bedrock.\(BedrockRegion.normalized(region)).amazonaws.com"
     }
 
-    /// Fetches the usable models, stages their details for the reasoning picker, and returns
-    /// their invocation IDs in display order. The caller commits the staged details with
-    /// `BedrockModelDetailsStore.commitStaged(region:apiKey:)` once it keeps the list.
+    /// Fetches the usable models, saves their details for the reasoning picker, and returns
+    /// their invocation IDs in display order. The details are saved with their Region, so a
+    /// fetch that finishes after a Region change is ignored.
     static func fetchModelIDs(apiKey: String, region: String, timeout: TimeInterval = 15) async throws -> [String] {
         let models = try await fetchModels(apiKey: apiKey, region: region, timeout: timeout)
-        BedrockModelDetailsStore.shared.stage(models, region: region, apiKey: apiKey)
+        BedrockModelDetailsStore.shared.save(models, region: region)
         return models.map(\.invocationID)
     }
 
@@ -109,7 +106,6 @@ enum BedrockModelCatalog {
                 modelName: model.modelName ?? model.modelId,
                 releasedAt: model.modelLifecycle?.startOfLifeTime.flatMap(parseDate),
                 additionalRequestFieldsSchema: converse.additionalRequestFieldsSchema,
-                embeddedReasoning: converse.reasoningSupported?.embedded,
                 maxTokensDefault: converse.maxTokensDefault,
                 maxTokensMaximum: converse.maxTokensMaximum
             )
@@ -165,22 +161,11 @@ enum BedrockModelCatalog {
         BedrockReasoningFieldMap.foundationModelID(for: modelID)
     }
 
-    /// How long a request to this model may take with the current timeout settings, for models
-    /// with a minimum timeout. `nil` for models that answer within the configured timeout.
+    /// A note for models with a minimum timeout. `nil` for models that answer within the
+    /// configured timeout.
     static func slowModelCaption(for modelID: String) -> String? {
-        guard let minimum = minimumTimeout(forModel: modelID) else { return nil }
-        let timeout = ReasoningConfig.requestTimeout(
-            EnhancementRequestSettings.timeout,
-            retryOnTimeout: EnhancementRequestSettings.retryOnTimeout,
-            level: nil
-        )
-        .raised(toAtLeast: minimum)
-        // A timeout retry makes up to three attempts.
-        let seconds = Int(timeout.seconds) * (timeout.retryOnTimeout ? 3 : 1)
-        return String(
-            format: String(localized: "This model is slower. Enhancement may take up to %d seconds."),
-            seconds
-        )
+        guard minimumTimeout(forModel: modelID) != nil else { return nil }
+        return String(localized: "This model is slower, so enhancement takes longer.")
     }
 
     /// On-demand models are called by their base ID. Models that only run through an
@@ -203,14 +188,10 @@ enum BedrockModelCatalog {
         return candidates.first { $0.hasPrefix("global.") } ?? candidates.first
     }
 
-    /// The default model first, then by provider, newest first within each provider.
+    /// By provider, newest first within each provider. `AIService` then moves the default
+    /// model to the front, as it does for every provider.
     static func ordered(_ models: [BedrockModelInfo]) -> [BedrockModelInfo] {
-        let defaultModel = AIProvider.bedrock.defaultModel
-        return models.sorted { lhs, rhs in
-            let lhsIsDefault = lhs.invocationID == defaultModel
-            let rhsIsDefault = rhs.invocationID == defaultModel
-            if lhsIsDefault != rhsIsDefault { return lhsIsDefault }
-
+        models.sorted { lhs, rhs in
             let providerOrder = lhs.providerName.localizedStandardCompare(rhs.providerName)
             if providerOrder != .orderedSame { return providerOrder == .orderedAscending }
 
@@ -362,13 +343,8 @@ enum BedrockModelCatalog {
         }
 
         struct Converse: Decodable {
-            struct ReasoningSupport: Decodable {
-                let embedded: Bool?
-            }
-
             let systemRoleSupported: Bool?
             let additionalRequestFieldsSchema: String?
-            let reasoningSupported: ReasoningSupport?
             let maxTokensDefault: Int?
             let maxTokensMaximum: Int?
         }
@@ -419,28 +395,8 @@ final class BedrockModelDetailsStore: @unchecked Sendable {
     private var snapshot: Snapshot?
     private var byID: [String: BedrockModelInfo] = [:]
     private var didLoad = false
-    /// Fetched details not yet kept, by Region and key. A fetch can finish after the Region or
-    /// key changed, so its details only replace the saved ones once the caller keeps its list.
-    private var staged: [String: [BedrockModelInfo]] = [:]
 
     private init() {}
-
-    private static func stagingKey(region: String, apiKey: String) -> String {
-        "\(BedrockRegion.normalized(region))\n\(apiKey)"
-    }
-
-    func stage(_ models: [BedrockModelInfo], region: String, apiKey: String) {
-        lock.withLock {
-            staged[Self.stagingKey(region: region, apiKey: apiKey)] = models
-        }
-    }
-
-    /// Saves the details staged by the fetch for this Region and key, if any.
-    func commitStaged(region: String, apiKey: String) {
-        let key = Self.stagingKey(region: region, apiKey: apiKey)
-        guard let models = lock.withLock({ staged.removeValue(forKey: key) }) else { return }
-        save(models, region: region)
-    }
 
     func save(_ models: [BedrockModelInfo], region: String) {
         let snapshot = Snapshot(region: BedrockRegion.normalized(region), models: models)
@@ -453,7 +409,8 @@ final class BedrockModelDetailsStore: @unchecked Sendable {
     }
 
     /// The details for a listed model in the current Region, or `nil` for custom IDs, models
-    /// from another Region's list, and when no live list is cached.
+    /// from another Region's list, and when no live list is cached. Another inference profile
+    /// of a listed model, such as a typed `eu.` ID, gets that model's details.
     func info(forInvocationID invocationID: String) -> BedrockModelInfo? {
         guard LiveModelListStore.shared.models(forProviderKey: AIProvider.bedrock.rawValue) != nil else {
             return nil
@@ -463,7 +420,9 @@ final class BedrockModelDetailsStore: @unchecked Sendable {
         return lock.withLock {
             loadIfNeeded()
             guard snapshot?.region == region else { return nil }
-            return byID[id]
+            if let info = byID[id] { return info }
+            let modelID = BedrockModelCatalog.foundationModelID(for: id)
+            return snapshot?.models.first { $0.modelID == modelID }
         }
     }
 
@@ -471,7 +430,6 @@ final class BedrockModelDetailsStore: @unchecked Sendable {
         lock.withLock {
             snapshot = nil
             byID = [:]
-            staged = [:]
             didLoad = true
             defaults.removeObject(forKey: Self.defaultsKey)
         }
