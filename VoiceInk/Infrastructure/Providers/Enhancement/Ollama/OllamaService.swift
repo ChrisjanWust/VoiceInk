@@ -79,6 +79,7 @@ class OllamaService: ObservableObject {
         _ text: String,
         withSystemPrompt systemPrompt: String? = nil,
         model: String? = nil,
+        think: Bool = false,
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> String {
@@ -100,7 +101,7 @@ class OllamaService: ObservableObject {
                 prompt: text,
                 systemPrompt: systemPrompt,
                 options: OllamaGenerationOptions(temperature: defaultTemperature),
-                think: false,
+                think: think,
                 timeout: timeout,
                 retryOnTimeout: retryOnTimeout
             )

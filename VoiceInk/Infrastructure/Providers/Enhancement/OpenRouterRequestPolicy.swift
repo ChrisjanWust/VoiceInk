@@ -9,14 +9,21 @@ struct OpenRouterRequestPolicy {
 
     static func lowLatency(
         modelName: String,
-        modelMetadata: OpenRouterModel?
+        modelMetadata: OpenRouterModel?,
+        reasoningLevel: ReasoningLevel? = nil
     ) -> OpenRouterRequestPolicy {
         let supportedParameters = Set(modelMetadata?.supportedParameters ?? [])
+        let selectedReasoning = ReasoningConfig.effectiveLevel(
+            reasoningLevel,
+            for: .openRouter,
+            modelName: modelName,
+            openRouterModel: modelMetadata
+        ).map { reasoning(for: $0, capabilities: modelMetadata?.reasoning) }
 
         return OpenRouterRequestPolicy(
             model: nitroVariant(of: modelName),
             temperature: supportedParameters.contains("temperature") ? 0.3 : nil,
-            reasoning: reasoningConfiguration(
+            reasoning: selectedReasoning ?? reasoningConfiguration(
                 capabilities: modelMetadata?.reasoning,
                 supportsReasoningParameter: supportedParameters.contains("reasoning")
             ),
@@ -55,6 +62,20 @@ struct OpenRouterRequestPolicy {
         }
 
         return OpenRouterReasoning(enabled: false, exclude: true)
+    }
+
+    // A level the user picked. Reasoning text is always excluded from the response.
+    private static func reasoning(
+        for level: ReasoningLevel,
+        capabilities: OpenRouterReasoningCapabilities?
+    ) -> OpenRouterReasoning {
+        if level == .off {
+            if capabilities?.supportedEfforts.contains("none") ?? true {
+                return OpenRouterReasoning(effort: "none", exclude: true)
+            }
+            return OpenRouterReasoning(enabled: false, exclude: true)
+        }
+        return OpenRouterReasoning(effort: level.effortValue, exclude: true)
     }
 
     static func outputWasTruncated(finishReason: String?) -> Bool {

@@ -17,6 +17,7 @@ extension AIService {
         retryOnTimeout: Bool = false
     ) async throws -> AIChatCompletionResult {
         let resolvedModel = modelName?.isEmpty == false ? modelName! : selectedModel(for: provider)
+        let reasoningLevel = EnhancementReasoningSettings.savedLevel(for: provider, model: resolvedModel)
 
         let result: String
         var openRouterCompletion: OpenRouterCompletion? = nil
@@ -27,7 +28,7 @@ extension AIService {
                 model: resolvedModel,
                 messages: messages,
                 systemPrompt: systemPrompt,
-                thinkingLevel: ReasoningConfig.geminiThinkingLevel(for: resolvedModel),
+                thinkingLevel: ReasoningConfig.geminiThinkingLevel(for: resolvedModel, level: reasoningLevel),
                 store: false,
                 timeout: timeout,
                 retryOnTimeout: retryOnTimeout
@@ -44,7 +45,8 @@ extension AIService {
         case .openRouter:
             let policy = OpenRouterRequestPolicy.lowLatency(
                 modelName: resolvedModel,
-                modelMetadata: openRouterModelMetadata(for: resolvedModel)
+                modelMetadata: openRouterModelMetadata(for: resolvedModel),
+                reasoningLevel: reasoningLevel
             )
             let completion = try await OpenRouterClient.chatCompletion(
                 apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
@@ -79,6 +81,11 @@ extension AIService {
                 messages: messages,
                 systemPrompt: systemPrompt,
                 temperature: 0.3,
+                reasoningEffort: ReasoningConfig.effectiveLevel(
+                    reasoningLevel,
+                    for: .custom,
+                    modelName: resolvedModel
+                )?.effortValue,
                 timeout: timeout,
                 retryOnTimeout: retryOnTimeout
             )
@@ -91,6 +98,7 @@ extension AIService {
                 text: localUserPrompt ?? chatPrompt(from: messages),
                 systemPrompt: systemPrompt ?? "",
                 model: resolvedModel,
+                think: ReasoningConfig.ollamaThink(level: reasoningLevel, modelName: resolvedModel),
                 timeout: timeout,
                 retryOnTimeout: retryOnTimeout
             )
@@ -105,11 +113,13 @@ extension AIService {
             }
             let reasoningEffort = ReasoningConfig.getReasoningParameter(
                 for: provider,
-                modelName: resolvedModel
+                modelName: resolvedModel,
+                level: reasoningLevel
             )
             let extraBody = ReasoningConfig.getExtraBodyParameters(
                 for: provider,
-                modelName: resolvedModel
+                modelName: resolvedModel,
+                level: reasoningLevel
             )
             result = try await OpenAILLMClient.chatCompletion(
                 baseURL: baseURL,

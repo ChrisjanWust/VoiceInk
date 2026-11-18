@@ -716,6 +716,7 @@ class AIService: ObservableObject {
         text: String,
         systemPrompt: String,
         model: String? = nil,
+        think: Bool = false,
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> String {
@@ -723,6 +724,7 @@ class AIService: ObservableObject {
             text,
             withSystemPrompt: systemPrompt,
             model: model,
+            think: think,
             timeout: timeout,
             retryOnTimeout: retryOnTimeout
         )
