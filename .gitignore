@@ -103,3 +103,7 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Claude Code worktrees and the per-worktree rule written by scripts/setup_worktree
+.claude/worktrees/
+.claude/rules/worktree.md

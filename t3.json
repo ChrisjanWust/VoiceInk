@@ -1,0 +1,12 @@
+{
+  "$schema": "https://t3.codes/schema/t3.json",
+  "scripts": [
+    {
+      "name": "Setup worktree",
+      "command": "./scripts/setup_worktree \"${T3CODE_PROJECT_ROOT:?T3 project root is required}\" \"${T3CODE_WORKTREE_PATH:?T3 worktree is required}\"",
+      "icon": "configure",
+      "runOnWorktreeCreate": true,
+      "async": false
+    }
+  ]
+}

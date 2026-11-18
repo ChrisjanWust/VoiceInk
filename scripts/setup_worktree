@@ -1,0 +1,80 @@
+#!/bin/bash
+set -euo pipefail
+# Initializes an ALREADY-CREATED git worktree of VoiceInk. It performs no git
+# operations: T3 Code and Claude Code own branch and worktree creation.
+#
+# T3 runs it as the project's worktree setup script (t3.json), with
+# T3CODE_PROJECT_ROOT and T3CODE_WORKTREE_PATH. Also accepts:
+#   scripts/setup_worktree SOURCE_CHECKOUT_PATH WORKTREE_PATH
+# With no arguments inside a linked worktree, the main checkout is inferred
+# (the Claude Code SessionStart hook in .claude/hooks runs it that way).
+#
+# A worktree needs no copied files to build: whisper.xcframework lives in
+# ~/VoiceInk-Dependencies, outside every checkout, and Xcode gives each checkout
+# path its own DerivedData. What a worktree does need is to keep its builds away
+# from the user's installed app, so this writes a Claude rule file saying how.
+#
+# Idempotent and safe to rerun. Missing machine prerequisites are reported, not fatal.
+
+source_checkout="${1:-${T3CODE_PROJECT_ROOT:-}}"
+worktree="${2:-${T3CODE_WORKTREE_PATH:-$PWD}}"
+
+# The shared git directory always lives in the main checkout.
+if [ -z "$source_checkout" ] && [ -d "$worktree" ]; then
+    common_dir="$(git -C "$worktree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if [ -n "$common_dir" ]; then
+        source_checkout="$(dirname "$common_dir")"
+    fi
+fi
+
+if [ -z "$source_checkout" ] || [ ! -d "$source_checkout" ] || [ ! -d "$worktree" ]; then
+    echo "Usage: $0 SOURCE_CHECKOUT_PATH WORKTREE_PATH (or set T3CODE_PROJECT_ROOT and T3CODE_WORKTREE_PATH)" >&2
+    exit 1
+fi
+
+source_checkout="$(cd "$source_checkout" && pwd -P)"
+worktree="$(cd "$worktree" && pwd -P)"
+if [ "$source_checkout" = "$worktree" ]; then
+    echo "Source checkout and destination worktree must differ" >&2
+    exit 1
+fi
+if [ ! -d "$worktree/VoiceInk.xcodeproj" ]; then
+    echo "Destination must be a VoiceInk checkout (no VoiceInk.xcodeproj in $worktree)" >&2
+    exit 1
+fi
+
+# Per-worktree build rules, loaded automatically by Claude Code in this worktree.
+# Generated and gitignored, like sphinx-app's per-worktree dev-port rule.
+rule_file="$worktree/.claude/rules/worktree.md"
+mkdir -p "$(dirname "$rule_file")"
+cat > "$rule_file" <<EOF
+# Building in this worktree
+
+This is a linked git worktree of VoiceInk. The main checkout is \`$source_checkout\`.
+
+- Never run \`make local\` or \`make release\` here. \`make local\` replaces \`~/Downloads/VoiceInk.app\`, the user's everyday app, with this branch's build.
+- Don't use \`make dev\` or \`make run\` either: they launch whichever "VoiceInk Dev.app" they find first, which may belong to another worktree.
+- Build the Debug app into this worktree (\`.build/\` is gitignored):
+  \`xcodebuild -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug -derivedDataPath .build/DerivedData CODE_SIGN_IDENTITY="" -skipPackagePluginValidation -skipMacroValidation build\`
+- Launch that build with \`open ".build/DerivedData/Build/Products/Debug/VoiceInk Dev.app"\`. Every worktree's Dev build has the same bundle id (\`com.prakashjoshipax.VoiceInk.dev\`), so they share settings and the SwiftData store, and only one can run at a time. Quit any running VoiceInk Dev first.
+- whisper.xcframework comes from \`~/VoiceInk-Dependencies\`, shared by every checkout. If it's missing, ask the user to run \`make setup\` in the main checkout. Don't build it from a worktree.
+- If \`xcodebuild\` says it requires Xcode, only the Command Line Tools are installed. Tell the user to install Xcode and run \`sudo xcode-select -s /Applications/Xcode.app\`. Don't work around it.
+EOF
+
+# Machine-wide prerequisites: warn, since nothing in the worktree can fix them.
+developer_dir="$(xcode-select -p 2>/dev/null || true)"
+case "$developer_dir" in
+    "" | *CommandLineTools*)
+        echo "Warning: full Xcode isn't selected (xcode-select -p: ${developer_dir:-none}), so builds will fail." >&2
+        echo "  Install Xcode, then: sudo xcode-select -s /Applications/Xcode.app" >&2
+        ;;
+esac
+if [ ! -d "$HOME/VoiceInk-Dependencies/whisper.cpp/build-apple/whisper.xcframework" ]; then
+    echo "Warning: whisper.xcframework isn't built yet. Run 'make setup' once in $source_checkout; every worktree shares it." >&2
+fi
+
+# Lives in the per-worktree git dir, so it is never committed or shared.
+git_dir="$(git -C "$worktree" rev-parse --path-format=absolute --git-dir)"
+touch "$git_dir/voiceink-setup-worktree-done"
+
+echo "Initialized worktree: $worktree (source: $source_checkout)"
