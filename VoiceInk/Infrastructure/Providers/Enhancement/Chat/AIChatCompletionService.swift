@@ -79,17 +79,12 @@ extension AIService {
         var openRouterCompletion: OpenRouterCompletion? = nil
         switch provider {
         case .gemini:
-            result = try await GeminiLLMClient.chatCompletion(
+            request.reasoning = ReasoningConfig.geminiThinkingLevel(for: resolvedModel, level: reasoningLevel)
+                .map(ChatRequest.Reasoning.effort)
+            client = GeminiChatClient(
                 apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                model: resolvedModel,
-                messages: llmkitMessages,
-                systemPrompt: systemPrompt,
-                thinkingLevel: ReasoningConfig.geminiThinkingLevel(for: resolvedModel, level: reasoningLevel),
-                store: false,
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
+                apiVersion: .forModel(resolvedModel)
             )
-            return AIChatCompletionResult(text: result, openRouterCompletion: openRouterCompletion)
         case .anthropic:
             if let reasoning = ReasoningConfig.anthropicReasoning(for: resolvedModel, level: reasoningLevel) {
                 // LLMkit can't send `thinking` or `output_config`, so a picked level uses the

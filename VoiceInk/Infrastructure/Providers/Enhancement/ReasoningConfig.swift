@@ -52,31 +52,22 @@ struct ReasoningConfig {
         "gemini-3.1-flash-lite-preview",
     ]
 
-    static func geminiThinkingLevel(for modelName: String, level: ReasoningLevel? = nil) -> GeminiThinkingLevel? {
+    /// The `thinking_level` to send: the picked level, or Default's low-latency level.
+    static func geminiThinkingLevel(for modelName: String, level: ReasoningLevel? = nil) -> String? {
         if let level = effectiveLevel(level, for: .gemini, modelName: modelName) {
-            return geminiThinkingLevel(from: level)
+            return level.effortValue
         }
         if geminiMinimalThinkingModels.contains(modelName) {
-            return .minimal
+            return "minimal"
         }
         if geminiLowThinkingModels.contains(modelName) {
-            return .low
+            return "low"
         }
         return nil
     }
 
-    private static func geminiThinkingLevel(from level: ReasoningLevel) -> GeminiThinkingLevel? {
-        switch level {
-        case .minimal: return .minimal
-        case .low: return .low
-        case .medium: return .medium
-        case .high: return .high
-        case .off, .xhigh, .max, .enabled: return nil
-        }
-    }
-
-    // Verified live on 2026-11-17. The API also lists "xhigh", but LLMkit's
-    // GeminiThinkingLevel can't send it yet.
+    // Verified live on 2026-11-17. The API also lists "xhigh", which VoiceInkChat can send,
+    // but in live tests only Gemini 4 Hydrogen and Neon accepted it, so it isn't offered yet.
     private static func geminiLevels(for modelName: String) -> [ReasoningLevel] {
         if geminiLowThinkingModels.contains(modelName) {
             return [.low, .medium, .high]
@@ -458,13 +449,7 @@ struct ReasoningConfig {
     ) -> ReasoningLevel? {
         switch provider {
         case .gemini:
-            switch geminiThinkingLevel(for: modelName) {
-            case .minimal: return .minimal
-            case .low: return .low
-            case .medium: return .medium
-            case .high: return .high
-            case nil: return nil
-            }
+            return geminiThinkingLevel(for: modelName).flatMap(ReasoningLevel.init(effortValue:))
         case .openRouter:
             guard let openRouterModel = modelInfo.openRouterModel,
                 openRouterModel.supportedParameters.contains("reasoning"),

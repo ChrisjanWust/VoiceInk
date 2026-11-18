@@ -90,9 +90,9 @@ enum ProviderModelCatalog {
     /// Fetches the Gemini models lists and returns the text models usable through the
     /// Interactions API, newest first.
     ///
-    /// LLMkit sends `-preview` models to `/v1beta/interactions` and everything else to
-    /// `/v1/interactions`, and each endpoint only accepts models from its own version's list
-    /// (others return 404). So a model is usable when the v1 list has it, or when it is a
+    /// Requests go to `/v1beta/interactions` for `-preview` models and to `/v1/interactions`
+    /// for everything else (`GeminiAPIVersion.forModel`), and v1 only accepts models on its own
+    /// list (others return 404). So a model is usable when the v1 list has it, or when it is a
     /// `-preview` model on the v1beta list.
     static func fetchGeminiModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
         let trimmedKey = try validatedKey(apiKey)
