@@ -981,9 +981,13 @@ class AIService: ObservableObject {
     /// unless reasoning effort is `none`. So only offer the OpenAI models whose Default
     /// request VoiceInk has made work: `none`, or `temperature: null` for models that
     /// reject `none`.
+    ///
+    /// A model that a retired-model migration remaps (Cerebras still serving an ID VoiceInk
+    /// treats as retired, say) would silently run as another model, so it isn't offered.
     private func usableLiveModels(_ models: [String], for provider: AIProvider) -> [String] {
-        guard provider == .openAI else { return models }
-        return models.filter(ReasoningConfig.isOpenAIDefaultRequestSupported)
+        let current = models.filter { EnhancementModelMigration.resolvedModel($0, for: provider) == $0 }
+        guard provider == .openAI else { return current }
+        return current.filter(ReasoningConfig.isOpenAIDefaultRequestSupported)
     }
 
     /// Puts the default model first so the picker opens on the recommended choice.

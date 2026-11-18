@@ -333,8 +333,19 @@ enum ProviderModelCatalog {
         .uniqued()
     }
 
+    // Models that always reason return `message.content` as a list of thinking and text
+    // chunks, whatever `reasoning_effort` says, and LLMkit only reads a plain string. The
+    // `reasoning` capability is also set on hybrid models that answer in plain text by
+    // default, so these are matched by ID. See
+    // https://docs.mistral.ai/inference/conversations/reasoning
+    private static let mistralAlwaysReasoningTokens = ["zai-glm", "magistral"]
+
     private static func isMistralEnhancementModel(_ model: MistralModel) -> Bool {
         guard let capabilities = model.capabilities, capabilities.completionChat == true else { return false }
+        let ids = [model.id, model.name ?? ""].map { $0.lowercased() }
+        if ids.contains(where: { id in mistralAlwaysReasoningTokens.contains(where: { id.contains($0) }) }) {
+            return false
+        }
         // OCR, moderation, classifier, transcription and speech models can also be
         // flagged for chat; none is a plain text model.
         let specialPurpose = [
