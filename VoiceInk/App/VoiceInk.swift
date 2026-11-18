@@ -103,6 +103,7 @@ struct VoiceInkApp: App {
         aiService.refreshOllamaAvailabilityInBackground()
         Task { @MainActor in
             await aiService.fetchOpenRouterModelsIfNeededForMigration()
+            await aiService.refreshLiveProviderModelsIfNeeded()
         }
 
         let updaterViewModel = UpdaterViewModel()
