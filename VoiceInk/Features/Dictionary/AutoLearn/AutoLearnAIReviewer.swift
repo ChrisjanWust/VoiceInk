@@ -1,5 +1,4 @@
 import Foundation
-import LLMkit
 
 enum AutoLearnReviewEligibility {
     static func accepts(source: String?, destination: String, aiReviewConfigurationID: String? = nil,

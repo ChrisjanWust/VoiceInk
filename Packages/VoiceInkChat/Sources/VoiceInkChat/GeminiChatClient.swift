@@ -15,13 +15,14 @@ public enum GeminiAPIVersion: String, Sendable {
     /// The beta API. Preview models, and some aliases such as `-latest`, are only served here.
     case v1beta
 
-    /// The version for a model, from the models list v1 serves (`GET /v1/models`, with the
-    /// `models/` prefix removed): v1 when it lists the model, otherwise v1beta.
+    /// The version for a model: v1beta for `-preview` models and `-latest` aliases, v1 for the rest.
     ///
-    /// This replaces LLMkit's rule (a `-preview` substring means v1beta), which sends
-    /// v1beta-only models such as the `-latest` aliases to v1, where they 404.
-    public static func forModel(_ model: String, v1Models: Set<String>) -> GeminiAPIVersion {
-        v1Models.contains(model) ? .v1 : .v1beta
+    /// LLMkit's rule only sent `-preview` models to v1beta, so the v1beta-only `-latest` aliases
+    /// went to v1, where they 404. v1beta also serves every v1 model, so a model this rule sends
+    /// to v1beta by mistake still works.
+    public static func forModel(_ model: String) -> GeminiAPIVersion {
+        let id = model.lowercased()
+        return id.contains("-preview") || id.hasSuffix("-latest") ? .v1beta : .v1
     }
 }
 
@@ -36,7 +37,7 @@ public enum GeminiAPIVersion: String, Sendable {
 /// `.effort("minimal")` (or `"low"` where minimal isn't supported) for the least thinking.
 public struct GeminiChatClient: ChatClient {
     public var apiKey: String
-    /// Pick it with ``GeminiAPIVersion/forModel(_:v1Models:)``.
+    /// Pick it with ``GeminiAPIVersion/forModel(_:)``.
     public var apiVersion: GeminiAPIVersion
     var baseURL = URL(string: "https://generativelanguage.googleapis.com")!
     var http = ChatHTTP.shared

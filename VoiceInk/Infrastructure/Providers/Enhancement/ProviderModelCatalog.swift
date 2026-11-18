@@ -29,6 +29,7 @@ enum ProviderModelCatalog {
     static let geminiModelsEndpoint = URL(string: "https://generativelanguage.googleapis.com/v1beta/models")!
     static let geminiStableModelsEndpoint = URL(string: "https://generativelanguage.googleapis.com/v1/models")!
     static let anthropicModelsEndpoint = URL(string: "https://api.anthropic.com/v1/models")!
+    static let anthropicAPIVersion = "2023-06-01"
     static let groqModelsEndpoint = URL(string: "https://api.groq.com/openai/v1/models")!
     static let cerebrasModelsEndpoint = URL(string: "https://api.cerebras.ai/v1/models")!
     static let mistralModelsEndpoint = URL(string: "https://api.mistral.ai/v1/models")!
@@ -90,9 +91,9 @@ enum ProviderModelCatalog {
     /// Fetches the Gemini models lists and returns the text models usable through the
     /// Interactions API, newest first.
     ///
-    /// LLMkit sends `-preview` models to `/v1beta/interactions` and everything else to
-    /// `/v1/interactions`, and each endpoint only accepts models from its own version's list
-    /// (others return 404). So a model is usable when the v1 list has it, or when it is a
+    /// Requests go to `/v1beta/interactions` for `-preview` models and to `/v1/interactions`
+    /// for everything else (`GeminiAPIVersion.forModel`), and v1 only accepts models on its own
+    /// list (others return 404). So a model is usable when the v1 list has it, or when it is a
     /// `-preview` model on the v1beta list.
     static func fetchGeminiModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
         let trimmedKey = try validatedKey(apiKey)
@@ -172,13 +173,12 @@ enum ProviderModelCatalog {
         let lowercased = id.lowercased()
         guard lowercased.hasPrefix("gemini-") || lowercased.hasPrefix("gemma-") else { return false }
         // Only Gemini 3 and later accept a system instruction on /v1/interactions, and
-        // enhancement always sends one.
+        // enhancement always sends one. This also drops versionless aliases such as
+        // `gemini-flash-latest`, which could point to an older model. A versioned `-latest`
+        // ID would pass, and VoiceInkChat sends it to v1beta, where those aliases live.
         if lowercased.hasPrefix("gemini-") {
             guard let major = geminiMajorVersion(lowercased), major >= 3 else { return false }
         }
-        // Moving aliases such as `gemini-flash-latest` are v1beta-only without a `-preview`
-        // suffix, so LLMkit would send them to v1, which returns 404.
-        if lowercased.hasSuffix("-latest") { return false }
         if geminiExcludedTokens.contains(where: { lowercased.contains($0) }) { return false }
         if hasDatedSuffix(lowercased) { return false }
         return true
@@ -203,8 +203,8 @@ enum ProviderModelCatalog {
 
             var request = URLRequest(url: components.url!)
             request.setValue(trimmedKey, forHTTPHeaderField: "x-api-key")
-            // The same version LLMkit sends with enhancement requests.
-            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            // The same version enhancement requests send.
+            request.setValue(anthropicAPIVersion, forHTTPHeaderField: "anthropic-version")
 
             let page = try decode(AnthropicModelList.self, from: try await perform(request, timeout: timeout))
             models.append(contentsOf: page.data)
@@ -361,20 +361,26 @@ enum ProviderModelCatalog {
         .uniqued()
     }
 
-    // Models that always reason return `message.content` as a list of thinking and text
-    // chunks, whatever `reasoning_effort` says, and LLMkit only reads a plain string. The
-    // `reasoning` capability is also set on hybrid models that answer in plain text by
-    // default, so these are matched by ID. Mistral Large 4 "always reasons" and defaults
-    // to `high`; `mistral-large-latest` points to it. See
-    // https://docs.mistral.ai/inference/conversations/reasoning
+    // Models that always reason. Their thinking-and-text chunk replies are readable now, but
+    // without documented levels Default would run them at their own (high) effort, untested:
+    // there's no Mistral key. So only those with levels in `ReasoningConfig` are offered,
+    // Mistral Large 4 and GLM 5.3, and Default sends their lowest effort. The `reasoning`
+    // capability is also set on hybrid models that answer in plain text by default, so these
+    // are matched by ID. See https://docs.mistral.ai/inference/conversations/reasoning
     private static let mistralAlwaysReasoningTokens = [
         "zai-glm", "magistral", "mistral-large-4", "mistral-large-latest",
     ]
 
+    private static func hasDocumentedMistralLevels(_ id: String) -> Bool {
+        ReasoningConfig.mistralLargeReasoningModels.contains(id) || ReasoningConfig.mistralGLMReasoningModels.contains(id)
+    }
+
     private static func isMistralEnhancementModel(_ model: MistralModel) -> Bool {
         guard let capabilities = model.capabilities, capabilities.completionChat == true else { return false }
         let ids = [model.id, model.name ?? ""].map { $0.lowercased() }
-        if ids.contains(where: { id in mistralAlwaysReasoningTokens.contains(where: { id.contains($0) }) }) {
+        if ids.contains(where: { id in mistralAlwaysReasoningTokens.contains(where: { id.contains($0) }) }),
+            !ids.contains(where: hasDocumentedMistralLevels)
+        {
             return false
         }
         // OCR, moderation, classifier, transcription and speech models can also be
@@ -602,12 +608,20 @@ enum ProviderModelCatalog {
             .uniqued()
     }
 
-    // MARK: - Key verification for Together AI, GMI Cloud, Baseten, Fireworks AI, Vercel AI Gateway
+    // MARK: - Key verification
 
-    /// An authenticated GET that needs no model ID. Vercel's model list is public, so its key
-    /// is checked against `/v1/credits` instead.
+    /// An authenticated GET that needs no model ID: the models list for most providers. Vercel's
+    /// model list is public, so its key is checked against `/v1/credits`, and OpenRouter's
+    /// against `/key`.
     static func keyVerificationEndpoint(for provider: AIProvider) -> URL? {
         switch provider {
+        case .openAI: return openAIModelsEndpoint
+        case .anthropic: return anthropicModelsEndpoint
+        case .gemini: return geminiStableModelsEndpoint
+        case .groq: return groqModelsEndpoint
+        case .cerebras: return cerebrasModelsEndpoint
+        case .mistral: return mistralModelsEndpoint
+        case .openRouter: return URL(string: "https://openrouter.ai/api/v1/key")
         case .togetherAI: return URL(string: "https://api.together.xyz/v1/models")
         case .gmiCloud: return gmiCloudModelsEndpoint
         case .baseten: return basetenModelsEndpoint
@@ -624,8 +638,17 @@ enum ProviderModelCatalog {
             return (false, "Invalid or missing base URL configuration")
         }
         do {
+            let key = try validatedKey(apiKey)
             var request = URLRequest(url: endpoint)
-            request.setValue("Bearer \(try validatedKey(apiKey))", forHTTPHeaderField: "Authorization")
+            switch provider {
+            case .anthropic:
+                request.setValue(key, forHTTPHeaderField: "x-api-key")
+                request.setValue(anthropicAPIVersion, forHTTPHeaderField: "anthropic-version")
+            case .gemini:
+                request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
+            default:
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            }
             _ = try await perform(request, timeout: timeout)
             return (true, nil)
         } catch {

@@ -127,7 +127,8 @@ import Testing
         await #expect {
             try await fails.http.send(get(fails), timeout: 5, retryOnTimeout: false)
         } throws: { error in
-            if case ChatError.networkError = error { return true }
+            // The URLError code survives, so the app can name an unknown host.
+            if case ChatError.networkError(_, let code) = error { return code == .cannotFindHost }
             return false
         }
         #expect(fails.attempts == 3)

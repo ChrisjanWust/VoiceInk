@@ -110,7 +110,7 @@ struct ChatHTTP: Sendable {
             do {
                 let (data, response) = try await Self.data(for: request, on: session, timeout: timeout)
                 guard let http = response as? HTTPURLResponse else {
-                    throw ChatError.networkError("No HTTP response received.")
+                    throw ChatError.networkError("No HTTP response received.", code: nil)
                 }
                 if (200..<300).contains(http.statusCode) {
                     return data
@@ -150,12 +150,12 @@ struct ChatHTTP: Sendable {
                     throw CancellationError()
                 }
                 sessions.replace(session)
-                lastError = ChatError.networkError(error.localizedDescription)
+                lastError = ChatError.networkError(error.localizedDescription, code: (error as? URLError)?.code)
                 delayBeforeRetry = true
             }
         }
 
-        throw lastError ?? ChatError.networkError("Request failed after \(Self.maxRetries + 1) attempts")
+        throw lastError ?? ChatError.networkError("Request failed after \(Self.maxRetries + 1) attempts", code: nil)
     }
 
     private struct AttemptTimedOut: Error {}

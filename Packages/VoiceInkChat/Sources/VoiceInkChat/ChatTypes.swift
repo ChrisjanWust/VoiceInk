@@ -67,8 +67,8 @@ public struct ChatRequest: Sendable, Equatable {
     public var temperature: Double?
     public var reasoning: Reasoning?
     /// Top-level body fields added last, so they override anything the client set. This is
-    /// where Fast mode's fields go, such as `service_tier` or `speed`. `.null` sends an explicit
-    /// `null`.
+    /// where Fast mode's fields go, such as `service_tier` or `performanceConfig`. `.null` sends
+    /// an explicit `null`.
     public var extraBody: [String: JSONValue]
     /// Headers added on top of the client's own, such as a beta header. Authentication headers
     /// (`Authorization`, `x-api-key`, `anthropic-version`, `x-goog-api-key`) always come from the

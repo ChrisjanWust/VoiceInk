@@ -1,6 +1,8 @@
 import Foundation
+// OllamaClient lists models and checks the connection; chat goes through VoiceInkChat.
 import LLMkit
 import SwiftUI
+import VoiceInkChat
 
 class OllamaService: ObservableObject {
     static let defaultBaseURL = "http://localhost:11434"
@@ -27,8 +29,6 @@ class OllamaService: ObservableObject {
     @Published var thinkingLevels: [String: [String]] = [:]
     @Published var isConnected: Bool = false
     @Published var isLoadingModels: Bool = false
-
-    private let defaultTemperature: Double = 0.3
 
     init() {
         self.baseURL = UserDefaults.standard.string(forKey: "ollamaBaseURL") ?? Self.defaultBaseURL
@@ -158,80 +158,41 @@ class OllamaService: ObservableObject {
         }
         return try? JSONDecoder().decode(OllamaShowResponse.self, from: data)
     }
+}
 
-    func enhance(
-        _ text: String,
-        withSystemPrompt systemPrompt: String? = nil,
-        model: String? = nil,
-        think: OllamaThink = .enabled(false),
-        timeout: TimeInterval = 30,
-        retryOnTimeout: Bool = false
-    ) async throws -> String {
-        guard let systemPrompt = systemPrompt else {
-            throw LocalAIError.invalidRequest
-        }
+/// VoiceInkChat's Ollama client, with VoiceInk's Ollama error messages.
+struct OllamaEnhancementClient: ChatClient {
+    let baseURL: URL
 
-        guard let url = baseURLValue else {
-            throw LocalAIError.invalidURL
-        }
-
-        let trimmedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let requestModel = (trimmedModel?.isEmpty == false ? trimmedModel : nil) ?? selectedModel
-
+    func complete(_ request: ChatRequest) async throws -> ChatResult {
         do {
-            switch think {
-            case .enabled(let enabled):
-                return try await OllamaClient.generate(
-                    baseURL: url,
-                    model: requestModel,
-                    prompt: text,
-                    systemPrompt: systemPrompt,
-                    options: OllamaGenerationOptions(temperature: defaultTemperature),
-                    think: enabled,
-                    timeout: timeout,
-                    retryOnTimeout: retryOnTimeout
-                )
-            case .level:
-                // LLMkit only sends `think` as a Bool, so named levels use the in-app client.
-                return try await OllamaGenerateClient.generate(
-                    baseURL: url,
-                    request: OllamaGenerateRequest(
-                        model: requestModel,
-                        prompt: text,
-                        system: systemPrompt,
-                        temperature: defaultTemperature,
-                        think: think
-                    ),
-                    timeout: timeout,
-                    retryOnTimeout: retryOnTimeout
-                )
-            }
-        } catch let error as LLMKitError {
-            throw mapLLMKitError(error)
+            return try await OllamaChatClient(baseURL: baseURL).complete(request)
+        } catch let error as ChatError {
+            throw Self.mapError(error)
         }
     }
 
-    private func mapLLMKitError(_ error: LLMKitError) -> LocalAIError {
+    private static func mapError(_ error: ChatError) -> Error {
         switch error {
         case .invalidURL:
-            return .invalidURL
-        case .httpError(let statusCode, _):
-            if statusCode == 404 { return .modelNotFound }
-            if statusCode == 408 { return .timeout }
-            if statusCode == 500 { return .serverError }
-            return .invalidResponse
+            return LocalAIError.invalidURL
+        case .httpError(let statusCode, _, _):
+            if statusCode == 404 { return LocalAIError.modelNotFound }
+            if statusCode == 408 { return LocalAIError.timeout }
+            if statusCode == 500 { return LocalAIError.serverError }
+            return LocalAIError.invalidResponse
         case .networkError:
-            return .serviceUnavailable
-        case .noResultReturned, .decodingError:
-            return .invalidResponse
+            return LocalAIError.serviceUnavailable
+        case .noResultReturned:
+            // An empty answer is a failed enhancement, as for every other provider, so the
+            // transcript is kept instead of pasting nothing.
+            return EnhancementError.enhancementFailed
+        case .decodingError, .missingAPIKey, .unsupported:
+            return LocalAIError.invalidResponse
         case .encodingError:
-            return .invalidRequest
-        case .missingAPIKey:
-            return .invalidResponse
+            return LocalAIError.invalidRequest
         case .timeout:
-            return .timeout
-        case .unsupportedModel:
-            return .modelNotFound
+            return LocalAIError.timeout
         }
     }
 }

@@ -172,11 +172,11 @@ enum AIProvider: String, CaseIterable, Sendable {
             ]
         case .mistral:
             // Offline fallback; AIService replaces it with the live list once a key is set.
-            // No Mistral Large 4 (`mistral-large-4`, `mistral-large-latest`): it always reasons,
-            // so its replies come as thinking and text chunks that LLMkit can't read.
+            // Mistral Large 4 always reasons; Default sends its lowest effort (ReasoningConfig).
             return [
                 "mistral-small-latest",
                 "mistral-medium-latest",
+                "mistral-large-latest",
             ]
         case .bedrock:
             // Each one answered VoiceInk's Default prompt in under 4 s in live tests on 2026-11-18.
@@ -673,50 +673,29 @@ class AIService: ObservableObject {
         let result: (isValid: Bool, errorMessage: String?)
 
         switch provider {
-        case .anthropic:
-            result = await AnthropicLLMClient.verifyAPIKey(key)
         case .elevenLabs:
             result = await ElevenLabsClient.verifyAPIKey(key)
         case .deepgram:
             result = await DeepgramClient.verifyAPIKey(key)
-        case .mistral:
-            result = await MistralTranscriptionClient.verifyAPIKey(key)
         case .soniox:
             result = await SonioxClient.verifyAPIKey(key)
         case .speechmatics:
             result = await SpeechmaticsClient.verifyAPIKey(key)
         case .assemblyAI:
             result = await AssemblyAIClient.verifyAPIKey(key)
-        case .openRouter:
-            result = await OpenRouterClient.verifyAPIKey(key)
-        case .openAI:
-            result = await OpenAILLMClient.verifyAPIKey(key)
-        case .gemini:
-            result = await GeminiLLMClient.verifyAPIKey(key)
         case .bedrock:
-            result = await BedrockConverseClient.verifyAPIKey(
+            result = await BedrockEnhancementClient.verifyAPIKey(
                 key,
                 region: BedrockRegion.current,
                 modelID: verificationModel
             )
-        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
+        case .openAI, .anthropic, .gemini, .groq, .cerebras, .mistral, .openRouter,
+            .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
             // An authenticated GET checks the key without depending on a model ID.
             result = await ProviderModelCatalog.verifyAPIKey(key, for: provider)
-        case .cerebras:
-            // GET /v1/models checks the key without depending on a model ID.
-            result = await OpenAITranscriptionClient.verifyAPIKey(
-                baseURL: URL(string: "https://api.cerebras.ai")!,
-                apiKey: key
-            )
         default:
-            guard let baseURL = URL(string: provider.baseURL) else {
-                return (false, "Invalid or missing base URL configuration")
-            }
-            result = await OpenAILLMClient.verifyAPIKey(
-                baseURL: baseURL,
-                apiKey: key,
-                model: verificationModel
-            )
+            // Custom endpoints are checked in their own editor (CustomModelConnectionTester).
+            result = (false, "Invalid or missing base URL configuration")
         }
 
         return result
@@ -821,22 +800,10 @@ class AIService: ObservableObject {
         }
     }
 
-    func enhanceWithOllama(
-        text: String,
-        systemPrompt: String,
-        model: String? = nil,
-        think: OllamaThink = .enabled(false),
-        timeout: TimeInterval = 30,
-        retryOnTimeout: Bool = false
-    ) async throws -> String {
-        try await ollamaService.enhance(
-            text,
-            withSystemPrompt: systemPrompt,
-            model: model,
-            think: think,
-            timeout: timeout,
-            retryOnTimeout: retryOnTimeout
-        )
+    /// The chat client for the configured Ollama server.
+    func ollamaChatClient() throws -> OllamaEnhancementClient {
+        guard let url = URL(string: ollamaService.baseURL) else { throw LocalAIError.invalidURL }
+        return OllamaEnhancementClient(baseURL: url)
     }
 
     func enhanceWithVoiceInkRefine(transcript: String, vocabulary: RecordingVocabulary) async throws -> String {
@@ -1057,10 +1024,9 @@ class AIService: ObservableObject {
         }
     }
 
-    /// LLMkit always sends `temperature: 0.3`, which OpenAI's reasoning models reject
-    /// unless reasoning effort is `none`. So only offer the OpenAI models whose Default
-    /// request VoiceInk has made work: `none`, or `temperature: null` for models that
-    /// reject `none`.
+    /// OpenAI's reasoning models reject `temperature` unless reasoning effort is `none`, and
+    /// some reject `none`. So only offer the OpenAI models whose Default request VoiceInk has
+    /// verified: `none`, or no temperature for models that reject `none`.
     ///
     /// A model that a retired-model migration remaps (Cerebras still serving an ID VoiceInk
     /// treats as retired, say) would silently run as another model, so it isn't offered.

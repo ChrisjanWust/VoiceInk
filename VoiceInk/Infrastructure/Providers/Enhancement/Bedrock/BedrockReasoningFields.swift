@@ -1,29 +1,12 @@
 import Foundation
+import VoiceInkChat
 
 // Maps a reasoning effort onto the Converse request fields each Amazon Bedrock model takes.
-//
-// This file only uses Foundation, so it can move with the Bedrock client into a standalone
-// chat library. Efforts are the usual strings: "none", "low", "medium", "high", "xhigh", "max".
-
-/// A JSON value for Converse `additionalModelRequestFields`.
-indirect enum BedrockJSONValue: Encodable, Sendable, Equatable {
-    case string(String)
-    case int(Int)
-    case object([String: BedrockJSONValue])
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .string(let value): try container.encode(value)
-        case .int(let value): try container.encode(value)
-        case .object(let value): try container.encode(value)
-        }
-    }
-}
+// Efforts are the usual strings: "none", "low", "medium", "high", "xhigh", "max".
 
 /// The reasoning fields a Converse request sends for an effort.
 struct BedrockReasoningFields: Sendable, Equatable {
-    let additionalModelRequestFields: [String: BedrockJSONValue]
+    let additionalModelRequestFields: [String: JSONValue]
     /// `inferenceConfig.maxTokens`, when thinking needs more room than the model's default
     /// output limit. `nil` keeps the model's default.
     let maxTokens: Int?
@@ -64,7 +47,7 @@ struct BedrockReasoningOptions: Sendable, Equatable {
     func fields(for effort: String) -> BedrockReasoningFields? {
         guard efforts.contains(effort) else { return nil }
         let off = effort == "none"
-        let request: [String: BedrockJSONValue]
+        let request: [String: JSONValue]
         switch encoding {
         case .schemaEnum(let path):
             request = Self.nested(path, .string(effort))
@@ -77,7 +60,7 @@ struct BedrockReasoningOptions: Sendable, Equatable {
                 ]
         case .anthropicBudget:
             guard let budget = Self.anthropicBudgets[effort] else { return nil }
-            request = ["thinking": .object(["type": .string("enabled"), "budget_tokens": .int(budget)])]
+            request = ["thinking": .object(["type": .string("enabled"), "budget_tokens": .number(Double(budget))])]
         case .novaEffort:
             request = ["reasoningConfig": .object(["type": .string("enabled"), "maxReasoningEffort": .string(effort)])]
         case .reasoningEffort:
@@ -91,7 +74,7 @@ struct BedrockReasoningOptions: Sendable, Equatable {
         return BedrockReasoningFields(additionalModelRequestFields: request, maxTokens: maxTokens)
     }
 
-    private static func nested(_ path: [String], _ value: BedrockJSONValue) -> [String: BedrockJSONValue] {
+    private static func nested(_ path: [String], _ value: JSONValue) -> [String: JSONValue] {
         guard let first = path.first else { return [:] }
         if path.count == 1 { return [first: value] }
         return [first: .object(nested(Array(path.dropFirst()), value))]

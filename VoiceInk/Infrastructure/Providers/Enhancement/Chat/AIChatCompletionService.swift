@@ -1,16 +1,17 @@
 import Foundation
-import LLMkit
+import VoiceInkChat
 
 struct AIChatCompletionResult: Sendable {
     let text: String
-    let openRouterCompletion: OpenRouterCompletion?
+    /// The full result for OpenRouter, which says which upstream provider served it.
+    let openRouterResult: ChatResult?
 }
 
 extension AIService {
     func performChatCompletion(
         provider: AIProvider,
         modelName: String?,
-        messages: [ChatMessage],
+        messages: [ChatRequest.Message],
         systemPrompt: String? = nil,
         localUserPrompt: String? = nil,
         timeout: TimeInterval = 30,
@@ -42,194 +43,151 @@ extension AIService {
         )
         .raised(toAtLeast: provider == .bedrock ? BedrockModelCatalog.minimumTimeout(forModel: resolvedModel) : nil)
 
-        if provider == .mistral,
-            let reasoningEffort = ReasoningConfig.mistralReasoningEffort(
-                for: resolvedModel,
-                level: reasoningLevel,
-                modelInfo: reasoningModelInfo(for: provider, model: resolvedModel)
-            )
-        {
-            // Mistral returns reasoning as chunked `content`, which LLMkit can't decode, so a
-            // picked level uses the in-app client. Default stays on the LLMkit path below.
-            var request = MistralChatRequest(model: resolvedModel, messages: messages, systemPrompt: systemPrompt)
-            request.reasoningEffort = reasoningEffort
-            let completion = try await MistralChatClient.chatCompletion(
-                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                request: request,
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
-            )
-            guard !completion.wasTruncated else { throw EnhancementError.outputTruncated }
-            return AIChatCompletionResult(text: completion.text, openRouterCompletion: nil)
-        }
+        var request = ChatRequest(
+            model: resolvedModel,
+            system: systemPrompt,
+            messages: messages,
+            timeout: requestTimeout.seconds,
+            retryOnTimeout: requestTimeout.retryOnTimeout
+        )
+        let client: any ChatClient
 
-        let result: String
-        var openRouterCompletion: OpenRouterCompletion? = nil
         switch provider {
         case .gemini:
-            result = try await GeminiLLMClient.chatCompletion(
+            request.reasoning = ReasoningConfig.geminiThinkingLevel(for: resolvedModel, level: reasoningLevel)
+                .map(ChatRequest.Reasoning.effort)
+            client = GeminiChatClient(
                 apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                model: resolvedModel,
-                messages: messages,
-                systemPrompt: systemPrompt,
-                thinkingLevel: ReasoningConfig.geminiThinkingLevel(for: resolvedModel, level: reasoningLevel),
-                store: false,
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
+                apiVersion: .forModel(resolvedModel)
             )
         case .anthropic:
-            if let reasoning = ReasoningConfig.anthropicReasoning(for: resolvedModel, level: reasoningLevel) {
-                // LLMkit can't send `thinking` or `output_config`, so a picked level uses the
-                // in-app client. Default stays on LLMkit, unchanged.
-                var request = AnthropicMessagesRequest(
-                    model: resolvedModel,
-                    messages: messages,
-                    systemPrompt: systemPrompt
-                )
-                reasoning.apply(to: &request)
-                let completion = try await AnthropicMessagesClient.createMessage(
-                    apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                    request: request,
-                    timeout: requestTimeout.seconds,
-                    retryOnTimeout: requestTimeout.retryOnTimeout
-                )
-                guard !completion.wasTruncated else { throw EnhancementError.outputTruncated }
-                result = completion.text
-            } else {
-                result = try await AnthropicLLMClient.chatCompletion(
-                    apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                    model: resolvedModel,
-                    messages: messages,
-                    systemPrompt: systemPrompt,
-                    timeout: requestTimeout.seconds,
-                    retryOnTimeout: requestTimeout.retryOnTimeout
-                )
-            }
+            ReasoningConfig.anthropicReasoning(for: resolvedModel, level: reasoningLevel)?.apply(to: &request)
+            client = AnthropicChatClient(apiKey: try chatAPIKey(for: provider, modelName: resolvedModel))
         case .openRouter:
             let policy = OpenRouterRequestPolicy.lowLatency(
                 modelName: resolvedModel,
                 modelMetadata: openRouterModelMetadata(for: resolvedModel),
                 reasoningLevel: reasoningLevel
             )
-            let completion = try await OpenRouterClient.chatCompletion(
-                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                model: policy.model,
-                messages: messages,
-                systemPrompt: systemPrompt,
-                temperature: policy.temperature,
-                reasoning: policy.reasoning,
-                provider: policy.provider,
-                includeRouterMetadata: true,
-                appReferer: URL(string: "https://tryvoiceink.com"),
-                appTitle: "VoiceInk",
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
-            )
-            guard !OpenRouterRequestPolicy.outputWasTruncated(finishReason: completion.finishReason) else {
-                throw EnhancementError.outputTruncated
-            }
-            result = completion.text
-            openRouterCompletion = completion
-        case .bedrock:
-            result = try await bedrockChatCompletion(
-                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                model: resolvedModel,
-                messages: messages,
-                systemPrompt: systemPrompt,
-                reasoning: BedrockReasoning.fields(
-                    for: reasoningLevel,
-                    model: reasoningModelInfo(for: .bedrock, model: resolvedModel).bedrockModel
+            request.model = policy.model
+            request.temperature = policy.temperature
+            request.reasoning = policy.reasoning
+            request.extraBody = policy.extraBody
+            client = RoutedOpenRouterClient(
+                client: OpenRouterChatClient(
+                    apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                    appReferer: URL(string: "https://tryvoiceink.com"),
+                    appTitle: "VoiceInk"
                 ),
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
+                preferences: policy.provider
+            )
+        case .bedrock:
+            let reasoning = BedrockReasoning.fields(
+                for: reasoningLevel,
+                model: reasoningModelInfo(for: .bedrock, model: resolvedModel).bedrockModel
+            )
+            request.maxTokens = reasoning?.maxTokens
+            client = BedrockEnhancementClient(
+                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                region: BedrockRegion.current,
+                additionalModelRequestFields: reasoning?.additionalModelRequestFields ?? [:]
             )
         case .custom:
             guard
                 let customConfiguration = CustomAIProviderManager.shared.requestConfiguration(forModel: resolvedModel),
-                let baseURL = URL(string: customConfiguration.baseURL)
+                let endpoint = URL(string: customConfiguration.baseURL)
             else {
                 throw EnhancementError.notConfigured
             }
-            result = try await OpenAILLMClient.chatCompletion(
-                baseURL: baseURL,
-                apiKey: customConfiguration.apiKey,
-                model: customConfiguration.modelName,
-                messages: messages,
-                systemPrompt: systemPrompt,
-                temperature: 0.3,
-                reasoningEffort: ReasoningConfig.getReasoningParameter(
-                    for: .custom,
-                    modelName: resolvedModel,
-                    level: reasoningLevel
-                ),
-                extraBody: ReasoningConfig.getExtraBodyParameters(
-                    for: .custom,
-                    modelName: resolvedModel,
-                    level: reasoningLevel
-                ),
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
-            )
+            // Saved under the display name; sent as the model name the endpoint expects.
+            request.model = customConfiguration.modelName
+            request.temperature = ReasoningConfig.temperature(for: .custom, modelName: resolvedModel, level: reasoningLevel)
+            request.reasoning = ReasoningConfig.getReasoningParameter(
+                for: .custom,
+                modelName: resolvedModel,
+                level: reasoningLevel
+            ).map(ChatRequest.Reasoning.effort)
+            client = OpenAICompatibleChatClient(apiKey: customConfiguration.apiKey, provider: .custom(endpoint: endpoint))
         case .voiceInkRefine:
             throw EnhancementError.customError(
                 String(localized: "VoiceInk Refine only supports transcript cleanup.")
             )
         case .ollama:
-            result = try await enhanceWithOllama(
-                text: localUserPrompt ?? chatPrompt(from: messages),
-                systemPrompt: systemPrompt ?? "",
-                model: resolvedModel,
-                think: ReasoningConfig.ollamaThink(
-                    level: reasoningLevel,
-                    modelName: resolvedModel,
-                    modelInfo: reasoningModelInfo(for: .ollama, model: resolvedModel)
-                ),
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
+            request.temperature = ReasoningConfig.defaultTemperature
+            request.reasoning = ReasoningConfig.ollamaReasoning(
+                level: reasoningLevel,
+                modelName: resolvedModel,
+                modelInfo: reasoningModelInfo(for: .ollama, model: resolvedModel)
             )
+            client = try ollamaChatClient()
         case .localCLI:
-            result = try await enhanceWithLocalCLI(
+            let text = try await enhanceWithLocalCLI(
                 systemPrompt: systemPrompt ?? "",
                 userPrompt: localUserPrompt ?? chatPrompt(from: messages)
             )
+            return AIChatCompletionResult(text: text, openRouterResult: nil)
         default:
-            guard let baseURL = URL(string: provider.baseURL) else {
+            guard let chatProvider = provider.openAICompatibleChatProvider else {
                 throw EnhancementError.notConfigured
             }
-            let reasoningEffort = ReasoningConfig.getReasoningParameter(
+            request.temperature = ReasoningConfig.temperature(for: provider, modelName: resolvedModel, level: reasoningLevel)
+            request.reasoning = ReasoningConfig.getReasoningParameter(
                 for: provider,
                 modelName: resolvedModel,
-                level: reasoningLevel
-            )
-            let extraBody = FastModeConfig.merging(
-                fastMode,
-                into: ReasoningConfig.getExtraBodyParameters(
-                    for: provider,
-                    modelName: resolvedModel,
-                    level: reasoningLevel
-                )
-            )
-            result = try await OpenAILLMClient.chatCompletion(
-                baseURL: baseURL,
+                level: reasoningLevel,
+                modelInfo: reasoningModelInfo(for: provider, model: resolvedModel)
+            ).map(ChatRequest.Reasoning.effort)
+            request.extraBody = ReasoningConfig.extraBodyFields(for: provider, modelName: resolvedModel, level: reasoningLevel)
+            client = OpenAICompatibleChatClient(
                 apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                model: resolvedModel,
-                messages: messages,
-                systemPrompt: systemPrompt,
-                temperature: 0.3,
-                reasoningEffort: reasoningEffort,
-                extraBody: extraBody,
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
+                provider: chatProvider
             )
         }
 
-        return AIChatCompletionResult(text: result, openRouterCompletion: openRouterCompletion)
+        // Fast mode's fields go last, so they win over anything else in the body.
+        request.extraBody.merge(fastMode?.bodyFields ?? [:]) { _, fast in fast }
+        let completion: ChatResult
+        do {
+            completion = try await client.complete(request)
+        } catch let error as BedrockError {
+            switch error {
+            case .timeout: throw EnhancementError.timeout
+            case .outputTruncated: throw EnhancementError.outputTruncated
+            case .missingAPIKey: throw EnhancementError.notConfigured
+            default: throw EnhancementError.customError(error.localizedDescription)
+            }
+        }
+        try Self.requireFinishedAnswer(completion, from: provider)
+        return AIChatCompletionResult(text: completion.text, openRouterResult: provider == .openRouter ? completion : nil)
+    }
+
+    /// Only a finished answer is used. A cut-off, filtered or failed one throws, so it's never
+    /// pasted: a guardrail's replacement text, for example, comes back with text.
+    ///
+    /// A Custom endpoint can be any server, and some name a normal finish differently (such as
+    /// `eos_token`) or leave it out, so there an unrecognised finish with text is accepted.
+    private static func requireFinishedAnswer(_ result: ChatResult, from provider: AIProvider) throws {
+        switch result.finishReason {
+        case .stop:
+            return
+        case .other where provider == .custom:
+            return
+        case .length:
+            throw EnhancementError.outputTruncated
+        case .contentFilter:
+            throw EnhancementError.customError(String(localized: "The AI provider blocked or filtered this response."))
+        case .toolCalls, .error, .other:
+            let reason = result.rawFinishReason ?? "none"
+            throw EnhancementError.customError(
+                String(localized: "The AI provider stopped without finishing its response (finish reason: \(reason)).")
+            )
+        }
     }
 
     func completeChat(
         provider: AIProvider,
         modelName: String?,
-        messages: [ChatMessage],
+        messages: [ChatRequest.Message],
         systemPrompt: String? = nil,
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
@@ -265,85 +223,11 @@ extension AIService {
         return key
     }
 
-    private func bedrockChatCompletion(
-        apiKey: String,
-        model: String,
-        messages: [ChatMessage],
-        systemPrompt: String?,
-        reasoning: BedrockReasoningFields?,
-        timeout: TimeInterval,
-        retryOnTimeout: Bool
-    ) async throws -> String {
-        // Converse takes the system prompt as its own field, like Anthropic's Messages API.
-        let systemMessages = messages.filter { $0.role == "system" }.map(\.content)
-        let system = systemPrompt ?? (systemMessages.isEmpty ? nil : systemMessages.joined(separator: "\n"))
-        // Converse requires turns to alternate and start with the user. The Assistant can leave two user
-        // turns in a row after a failed reply, so merge same-role neighbours and drop a leading assistant turn.
-        var bedrockMessages: [BedrockMessage] = []
-        for message in messages {
-            let role: BedrockMessage.Role
-            switch message.role {
-            case "user":
-                role = .user
-            case "assistant":
-                role = .assistant
-            default:
-                continue
-            }
-            if bedrockMessages.isEmpty, role == .assistant {
-                continue
-            }
-            if let last = bedrockMessages.last, last.role == role {
-                bedrockMessages[bedrockMessages.count - 1] = BedrockMessage(
-                    role: role,
-                    text: last.text + "\n\n" + message.content
-                )
-            } else {
-                bedrockMessages.append(BedrockMessage(role: role, text: message.content))
-            }
-        }
-
-        do {
-            let completion = try await BedrockConverseClient.converse(
-                apiKey: apiKey,
-                region: BedrockRegion.current,
-                modelID: model,
-                systemPrompt: system,
-                messages: bedrockMessages,
-                reasoning: reasoning,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
-            )
-            return completion.text
-        } catch let error as BedrockError {
-            switch error {
-            case .timeout:
-                throw EnhancementError.timeout
-            case .outputTruncated:
-                throw EnhancementError.outputTruncated
-            case .missingAPIKey:
-                throw EnhancementError.notConfigured
-            default:
-                throw EnhancementError.customError(error.localizedDescription)
-            }
-        }
-    }
-
-    private func chatPrompt(from messages: [ChatMessage]) -> String {
+    /// The conversation as one prompt, for Local CLI, which takes a single input.
+    private func chatPrompt(from messages: [ChatRequest.Message]) -> String {
         let formattedMessages = messages.map { message in
-            let label: String
-            switch message.role {
-            case "assistant":
-                label = "assistant"
-            case "user":
-                label = "user"
-            case "system":
-                label = "system"
-            default:
-                label = "other"
-            }
-            return """
-                <message role="\(label)">
+            """
+                <message role="\(message.role.rawValue)">
                 \(message.content)
                 </message>
                 """
@@ -355,5 +239,33 @@ extension AIService {
             \(formattedMessages)
             </conversation>
             """
+    }
+}
+
+/// OpenRouter with VoiceInk's routing preferences.
+private struct RoutedOpenRouterClient: ChatClient {
+    let client: OpenRouterChatClient
+    let preferences: OpenRouterChatClient.ProviderPreferences
+
+    func complete(_ request: ChatRequest) async throws -> ChatResult {
+        try await client.complete(request, providerPreferences: preferences)
+    }
+}
+
+private extension AIProvider {
+    /// The VoiceInkChat preset for providers that speak OpenAI Chat Completions.
+    var openAICompatibleChatProvider: OpenAICompatibleProvider? {
+        switch self {
+        case .openAI: return .openAI
+        case .groq: return .groq
+        case .cerebras: return .cerebras
+        case .mistral: return .mistral
+        case .togetherAI: return .together
+        case .gmiCloud: return .gmiCloud
+        case .baseten: return .baseten
+        case .fireworks: return .fireworks
+        case .vercelAIGateway: return .vercelAIGateway
+        default: return nil
+        }
     }
 }

@@ -1,11 +1,17 @@
 import Foundation
+// OpenRouterModel: the model catalog, which speech-to-text shares.
 import LLMkit
+import VoiceInkChat
 
+/// VoiceInk's OpenRouter request. Reasoning text is always excluded from the response
+/// (`OpenRouterChatClient` sends `exclude: true` with every `reasoning` object).
 struct OpenRouterRequestPolicy {
     let model: String
     let temperature: Double?
-    let reasoning: OpenRouterReasoning?
-    let provider: OpenRouterProviderPreferences
+    let reasoning: ChatRequest.Reasoning?
+    /// Only for a mandatory-reasoning model that lists no efforts: `reasoning: {exclude: true}`.
+    let extraBody: [String: JSONValue]
+    let provider: OpenRouterChatClient.ProviderPreferences
 
     static func lowLatency(
         modelName: String,
@@ -23,17 +29,23 @@ struct OpenRouterRequestPolicy {
         // Reasoning models such as OpenAI GPT-5 reject `temperature` once reasoning is on.
         let sendsTemperature = supportedParameters.contains("temperature")
             && (selectedLevel == nil || selectedLevel == .off)
+        let requestReasoning = selectedReasoning ?? reasoningConfiguration(
+            capabilities: modelMetadata?.reasoning,
+            supportsReasoningParameter: supportedParameters.contains("reasoning")
+        )
+        // A mandatory-reasoning model that lists no efforts reasons at its own default, so
+        // only `exclude` is sent; `enabled: true` would ask for OpenRouter's default effort.
+        let excludesOnly = requestReasoning == nil && supportedParameters.contains("reasoning")
+            && modelMetadata?.reasoning?.mandatory == true
 
         return OpenRouterRequestPolicy(
             model: nitroVariant(of: modelName),
             temperature: sendsTemperature ? 0.3 : nil,
-            reasoning: selectedReasoning ?? reasoningConfiguration(
-                capabilities: modelMetadata?.reasoning,
-                supportsReasoningParameter: supportedParameters.contains("reasoning")
-            ),
-            provider: OpenRouterProviderPreferences(
+            reasoning: requestReasoning,
+            extraBody: excludesOnly ? ["reasoning": ["exclude": true]] : [:],
+            provider: OpenRouterChatClient.ProviderPreferences(
                 sort: .throughput,
-                preferredMaxLatency: OpenRouterPercentileThresholds(p90: 2.5),
+                preferredMaxLatencyP90: 2.5,
                 requireParameters: true,
                 allowFallbacks: true
             )
@@ -51,39 +63,35 @@ struct OpenRouterRequestPolicy {
     private static func reasoningConfiguration(
         capabilities: OpenRouterReasoningCapabilities?,
         supportsReasoningParameter: Bool
-    ) -> OpenRouterReasoning? {
+    ) -> ChatRequest.Reasoning? {
         guard supportsReasoningParameter, let capabilities else {
             return nil
         }
 
         if capabilities.mandatory {
-            let minimumEffort = capabilities.supportedEfforts.last
-            return OpenRouterReasoning(effort: minimumEffort, exclude: true)
+            // Reasoning can't be turned off, so ask for the least. A model that lists no
+            // efforts gets no `reasoning` here (see `excludesOnly`).
+            return capabilities.supportedEfforts.last.map(ChatRequest.Reasoning.effort)
         }
 
         if capabilities.supportedEfforts.contains("none") {
-            return OpenRouterReasoning(effort: "none", exclude: true)
+            return .effort("none")
         }
 
-        return OpenRouterReasoning(enabled: false, exclude: true)
+        return .disabled
     }
 
-    // A level the user picked. Reasoning text is always excluded from the response.
+    // A level the user picked.
     private static func reasoning(
         for level: ReasoningLevel,
         capabilities: OpenRouterReasoningCapabilities?
-    ) -> OpenRouterReasoning {
+    ) -> ChatRequest.Reasoning {
         if level == .off {
             if capabilities?.supportedEfforts.contains("none") ?? true {
-                return OpenRouterReasoning(effort: "none", exclude: true)
+                return .effort("none")
             }
-            return OpenRouterReasoning(enabled: false, exclude: true)
+            return .disabled
         }
-        return OpenRouterReasoning(effort: level.effortValue, exclude: true)
-    }
-
-    static func outputWasTruncated(finishReason: String?) -> Bool {
-        guard let finishReason else { return false }
-        return ["length", "max_tokens", "max_output_tokens"].contains(finishReason.lowercased())
+        return level.effortValue.map(ChatRequest.Reasoning.effort) ?? .enabled
     }
 }

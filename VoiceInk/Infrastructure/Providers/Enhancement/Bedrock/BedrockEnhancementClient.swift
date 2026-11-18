@@ -1,4 +1,5 @@
 import Foundation
+import VoiceInkChat
 
 /// The AWS Region that Amazon Bedrock requests go to.
 ///
@@ -60,30 +61,6 @@ enum BedrockRegion {
     }
 }
 
-struct BedrockMessage: Sendable, Equatable {
-    enum Role: String, Sendable {
-        case user
-        case assistant
-    }
-
-    let role: Role
-    let text: String
-}
-
-struct BedrockConverseResult: Sendable, Equatable {
-    /// The model's answer: every `text` content block, joined. Reasoning blocks are never included.
-    let text: String
-    let stopReason: String?
-
-    var wasTruncated: Bool {
-        stopReason == "max_tokens" || stopReason == "model_context_window_exceeded"
-    }
-
-    var wasBlocked: Bool {
-        stopReason == "guardrail_intervened" || stopReason == "content_filtered"
-    }
-}
-
 /// Errors from Amazon Bedrock, with messages written for the person using the app.
 enum BedrockError: Error, LocalizedError, Equatable {
     case missingAPIKey
@@ -129,23 +106,6 @@ enum BedrockError: Error, LocalizedError, Equatable {
                 modelID: modelID,
                 region: region
             )
-        }
-    }
-
-    var isRetryable: Bool {
-        switch self {
-        case .networkError:
-            return true
-        case .http(let statusCode, let errorType, _, _, _):
-            if statusCode == 429 {
-                return true
-            }
-            if errorType == "ModelErrorException" {
-                return false
-            }
-            return [500, 502, 503, 504, 529].contains(statusCode)
-        default:
-            return false
         }
     }
 }
@@ -306,74 +266,68 @@ enum BedrockErrorDescriber {
     }
 }
 
-/// Minimal client for the Amazon Bedrock Runtime Converse API, authenticated with a Bedrock API key.
+/// VoiceInkChat's Bedrock Converse client with a model's reasoning fields, reporting failures as
+/// `BedrockError` so people see VoiceInk's Bedrock messages.
 ///
-/// `POST https://bedrock-runtime.{region}.amazonaws.com/model/{modelId}/converse`
-///
-/// By default no inference or reasoning parameters are sent, so each model runs with its Bedrock
+/// Default sends no inference or reasoning parameters, so each model runs with its Bedrock
 /// defaults. A picked reasoning level adds that model's own `additionalModelRequestFields`.
-/// Only `text` content blocks are returned; `reasoningContent` blocks are dropped.
-enum BedrockConverseClient {
-    static func converse(
-        apiKey: String,
-        region: String,
-        modelID: String,
-        systemPrompt: String?,
-        messages: [BedrockMessage],
-        reasoning: BedrockReasoningFields? = nil,
-        timeout: TimeInterval = 30,
-        retryOnTimeout: Bool = false,
-        maxRetries: Int = 2
-    ) async throws -> BedrockConverseResult {
-        let request = try makeRequest(
-            apiKey: apiKey,
-            region: region,
-            modelID: modelID,
-            systemPrompt: systemPrompt,
-            messages: messages,
-            reasoning: reasoning,
-            timeout: timeout
-        )
-        let normalizedRegion = BedrockRegion.normalized(region)
-        let trimmedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+struct BedrockEnhancementClient: ChatClient {
+    let apiKey: String
+    let region: String
+    var additionalModelRequestFields: [String: JSONValue] = [:]
 
-        var lastError: Error = BedrockError.networkError("The request failed.")
-        let attempts = max(0, maxRetries) + 1
-        var delayBeforeRetry = true
-
-        for attempt in 0..<attempts {
-            try Task.checkCancellation()
-            if attempt > 0 && delayBeforeRetry {
-                try await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempt - 1)) * 1_000_000_000))
-            }
-
-            do {
-                let (data, response) = try await send(request, timeout: timeout, region: normalizedRegion)
-                return try parseResponse(
-                    data: data,
-                    response: response,
-                    modelID: trimmedModelID,
-                    region: normalizedRegion
-                )
-            } catch let error as BedrockError {
-                lastError = error
-                let isTimeout =
-                    error == .timeout
-                    || {
-                        if case .http(408, _, _, _, _) = error { return true }
-                        return false
-                    }()
-                if isTimeout {
-                    guard retryOnTimeout, attempt < attempts - 1 else { throw error }
-                    delayBeforeRetry = false
-                    continue
-                }
-                guard error.isRetryable, attempt < attempts - 1 else { throw error }
-                delayBeforeRetry = true
-            }
+    /// Throws `BedrockError`, including `outputTruncated` and `contentBlocked` for a cut-off or
+    /// guardrail-replaced answer, or `ChatError.noResultReturned` for an empty one.
+    func complete(_ request: ChatRequest) async throws -> ChatResult {
+        let modelID = request.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let region = BedrockRegion.normalized(region)
+        let result: ChatResult
+        do {
+            result = try await BedrockChatClient(apiKey: apiKey, region: region)
+                .complete(request, additionalModelRequestFields: additionalModelRequestFields)
+        } catch let error as ChatError {
+            throw Self.bedrockError(for: error, modelID: modelID, region: region)
         }
+        switch result.finishReason {
+        case .contentFilter:
+            throw BedrockError.contentBlocked(stopReason: result.rawFinishReason ?? "")
+        case .length:
+            throw BedrockError.outputTruncated
+        default:
+            return result
+        }
+    }
 
-        throw lastError
+    private static func bedrockError(for error: ChatError, modelID: String, region: String) -> Error {
+        switch error {
+        case .missingAPIKey:
+            return BedrockError.missingAPIKey
+        case .invalidURL:
+            return BedrockError.invalidRegion(region)
+        case .unsupported:
+            return BedrockError.missingModelID
+        case .networkError(let detail, let code):
+            if code == .cannotFindHost || code == .dnsLookupFailed {
+                return BedrockError.unreachableRegion(region: region, detail: detail)
+            }
+            return BedrockError.networkError(detail)
+        case .timeout:
+            return BedrockError.timeout
+        case .httpError(let statusCode, let message, let errorType):
+            return BedrockError.http(
+                statusCode: statusCode,
+                errorType: errorType,
+                message: message,
+                modelID: modelID,
+                region: region
+            )
+        case .decodingError(let detail):
+            return BedrockError.invalidResponse(detail)
+        case .encodingError:
+            return BedrockError.invalidResponse(error.localizedDescription)
+        case .noResultReturned:
+            return error
+        }
     }
 
     /// Checks the key, Region and model together with a tiny Converse request.
@@ -387,206 +341,15 @@ enum BedrockConverseClient {
         timeout: TimeInterval = 20
     ) async -> (isValid: Bool, errorMessage: String?) {
         do {
-            _ = try await converse(
-                apiKey: apiKey,
-                region: region,
-                modelID: modelID,
-                systemPrompt: nil,
-                messages: [BedrockMessage(role: .user, text: "Reply with the single word OK.")],
-                timeout: timeout,
-                retryOnTimeout: false,
-                maxRetries: 0
+            _ = try await BedrockEnhancementClient(apiKey: apiKey, region: region).complete(
+                ChatRequest(model: modelID, messages: [.user("Reply with the single word OK.")], timeout: timeout)
             )
             return (true, nil)
-        } catch BedrockError.outputTruncated {
-            // The key, Region and model all worked; the reply just hit the model's default limit.
-            return (true, nil)
-        } catch BedrockError.contentBlocked {
+        } catch BedrockError.outputTruncated, BedrockError.contentBlocked, ChatError.noResultReturned {
+            // The key, Region and model all worked; only the reply was cut off, filtered or empty.
             return (true, nil)
         } catch {
             return (false, error.localizedDescription)
         }
     }
-
-    static func normalizedAPIKey(_ apiKey: String) -> String {
-        var key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if key.lowercased().hasPrefix("bearer ") {
-            key = String(key.dropFirst("bearer ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return key
-    }
-
-    /// Percent-encodes a model ID, inference profile ID or ARN for the request path.
-    static func encodedModelID(_ modelID: String) -> String {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        return modelID.addingPercentEncoding(withAllowedCharacters: allowed) ?? modelID
-    }
-
-    static func makeRequest(
-        apiKey: String,
-        region: String,
-        modelID: String,
-        systemPrompt: String?,
-        messages: [BedrockMessage],
-        reasoning: BedrockReasoningFields? = nil,
-        timeout: TimeInterval
-    ) throws -> URLRequest {
-        let key = normalizedAPIKey(apiKey)
-        guard !key.isEmpty else { throw BedrockError.missingAPIKey }
-
-        let normalizedRegion = BedrockRegion.normalized(region)
-        guard BedrockRegion.isValid(normalizedRegion) else { throw BedrockError.invalidRegion(region) }
-
-        let trimmedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedModelID.isEmpty else { throw BedrockError.missingModelID }
-
-        let urlString =
-            "\(BedrockRegion.runtimeEndpoint(for: normalizedRegion))/model/\(encodedModelID(trimmedModelID))/converse"
-        guard let url = URL(string: urlString) else { throw BedrockError.missingModelID }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = timeout
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONEncoder().encode(
-            ConverseRequestBody(systemPrompt: systemPrompt, messages: messages, reasoning: reasoning)
-        )
-        return request
-    }
-
-    static func parseResponse(
-        data: Data,
-        response: URLResponse,
-        modelID: String,
-        region: String
-    ) throws -> BedrockConverseResult {
-        guard let http = response as? HTTPURLResponse else {
-            throw BedrockError.invalidResponse("No HTTP response.")
-        }
-
-        guard (200..<300).contains(http.statusCode) else {
-            let parsed = BedrockErrorDescriber.parse(
-                data: data,
-                errorTypeHeader: http.value(forHTTPHeaderField: "x-amzn-ErrorType")
-            )
-            throw BedrockError.http(
-                statusCode: http.statusCode,
-                errorType: parsed.errorType,
-                message: parsed.message,
-                modelID: modelID,
-                region: region
-            )
-        }
-
-        let result = try decodeResult(from: data)
-        if result.wasBlocked {
-            throw BedrockError.contentBlocked(stopReason: result.stopReason ?? "")
-        }
-        if result.wasTruncated {
-            throw BedrockError.outputTruncated
-        }
-        return result
-    }
-
-    static func decodeResult(from data: Data) throws -> BedrockConverseResult {
-        let decoded: ConverseResponseBody
-        do {
-            decoded = try JSONDecoder().decode(ConverseResponseBody.self, from: data)
-        } catch {
-            throw BedrockError.invalidResponse(error.localizedDescription)
-        }
-
-        let text = (decoded.output?.message?.content ?? [])
-            .compactMap(\.text)
-            .joined()
-            // Some models end lines with Markdown hard-break spaces, which would be pasted.
-            .replacingOccurrences(of: "[ \t]+(?=\n|$)", with: "", options: .regularExpression)
-        return BedrockConverseResult(text: text, stopReason: decoded.stopReason)
-    }
-
-    private static func send(
-        _ request: URLRequest,
-        timeout: TimeInterval,
-        region: String
-    ) async throws -> (Data, URLResponse) {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = timeout
-        configuration.timeoutIntervalForResource = timeout
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.urlCache = nil
-        let session = URLSession(configuration: configuration)
-        defer { session.finishTasksAndInvalidate() }
-
-        do {
-            return try await session.data(for: request)
-        } catch let error as NSError where error.domain == NSURLErrorDomain {
-            switch error.code {
-            case NSURLErrorCancelled:
-                throw CancellationError()
-            case NSURLErrorTimedOut:
-                throw BedrockError.timeout
-            case NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed:
-                throw BedrockError.unreachableRegion(region: region, detail: error.localizedDescription)
-            default:
-                throw BedrockError.networkError(error.localizedDescription)
-            }
-        }
-    }
-}
-
-// MARK: - Request and response bodies
-
-private struct ConverseRequestBody: Encodable {
-    struct TextBlock: Encodable {
-        let text: String
-    }
-
-    struct Message: Encodable {
-        let role: String
-        let content: [TextBlock]
-    }
-
-    struct InferenceConfig: Encodable {
-        let maxTokens: Int
-    }
-
-    let messages: [Message]
-    let system: [TextBlock]?
-    // Left out entirely on Default, so the request matches one with no reasoning level.
-    let additionalModelRequestFields: [String: BedrockJSONValue]?
-    let inferenceConfig: InferenceConfig?
-
-    init(systemPrompt: String?, messages: [BedrockMessage], reasoning: BedrockReasoningFields? = nil) {
-        self.messages = messages.map { Message(role: $0.role.rawValue, content: [TextBlock(text: $0.text)]) }
-        if let systemPrompt, !systemPrompt.isEmpty {
-            self.system = [TextBlock(text: systemPrompt)]
-        } else {
-            self.system = nil
-        }
-        self.additionalModelRequestFields = reasoning?.additionalModelRequestFields
-        self.inferenceConfig = reasoning?.maxTokens.map(InferenceConfig.init(maxTokens:))
-    }
-}
-
-private struct ConverseResponseBody: Decodable {
-    struct Output: Decodable {
-        let message: Message?
-    }
-
-    struct Message: Decodable {
-        let role: String?
-        let content: [ContentBlock]?
-    }
-
-    /// A union in the API. Only `text` is read; `reasoningContent`, `toolUse`,
-    /// `citationsContent` and the rest are skipped.
-    struct ContentBlock: Decodable {
-        let text: String?
-    }
-
-    let output: Output?
-    let stopReason: String?
 }
