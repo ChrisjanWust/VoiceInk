@@ -103,9 +103,8 @@ public struct BedrockChatClient: ChatClient {
 
         var request = request
         request.model = modelID
-        let headers = ["Accept": "application/json"]
-            .merging(request.extraHeaders) { _, extra in extra }
-            .merging(["Authorization": "Bearer \(key)"]) { _, auth in auth }
+        let headers = ChatHTTP.mergedHeaders(
+            ["Accept": "application/json"], request.extraHeaders, ["Authorization": "Bearer \(key)"])
         return try ChatHTTP.jsonRequest(
             url: try Self.endpoint(region: region, modelID: modelID),
             body: try Self.body(for: request, additionalModelRequestFields: additionalModelRequestFields),

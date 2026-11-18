@@ -52,12 +52,15 @@ public struct ServerSentEventParser: Sendable {
             return feed(text)
         }
         let splitIndex = Self.utf8SafeSplitIndex(bytes)
-        if splitIndex > 0, let text = String(data: bytes.prefix(splitIndex), encoding: .utf8) {
+        if splitIndex < bytes.count {
+            // A character split across chunks: hold its first bytes until the rest arrives.
             pendingBytes = Data(bytes.suffix(from: bytes.startIndex + splitIndex))
-            return feed(text)
+            let prefix = bytes.prefix(splitIndex)
+            return prefix.isEmpty ? [] : feed(String(decoding: prefix, as: UTF8.self))
         }
-        pendingBytes = bytes
-        return []
+        // Invalid bytes rather than a split character. Decode them as U+FFFD and carry on, so
+        // one bad byte can't swallow every later event.
+        return feed(String(decoding: bytes, as: UTF8.self))
     }
 
     /// Feeds text and returns the events it completes.
@@ -97,13 +100,20 @@ public struct ServerSentEventParser: Sendable {
     /// Ends the stream. A final event without a trailing blank line is still delivered, which
     /// matches how providers close their streams in practice.
     public mutating func finish() -> [ServerSentEvent] {
+        var flushed: [ServerSentEvent] = []
+        if !pendingBytes.isEmpty {
+            // A stream that ended in the middle of a character.
+            let rest = String(decoding: pendingBytes, as: UTF8.self)
+            pendingBytes.removeAll()
+            flushed = feed(rest)
+        }
         if !incompleteLine.isEmpty || previousChunkEndedWithCR {
             parseLine(incompleteLine)
             incompleteLine = ""
             previousChunkEndedWithCR = false
         }
         dispatchEvent()
-        return takeEvents()
+        return flushed + takeEvents()
     }
 
     private mutating func takeEvents() -> [ServerSentEvent] {

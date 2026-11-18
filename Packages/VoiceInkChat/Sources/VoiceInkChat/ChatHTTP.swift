@@ -75,6 +75,19 @@ public struct ChatHTTP: Sendable {
         return request
     }
 
+    /// Merges header layers, with each later layer winning. Names compare case-insensitively, as
+    /// in HTTP and `URLRequest`, so `authorization` in one layer replaces `Authorization` in
+    /// another instead of racing it.
+    public static func mergedHeaders(_ layers: [String: String]...) -> [String: String] {
+        var byName: [String: (name: String, value: String)] = [:]
+        for layer in layers {
+            for (name, value) in layer {
+                byName[name.lowercased()] = (name, value)
+            }
+        }
+        return Dictionary(uniqueKeysWithValues: byName.values.map { ($0.name, $0.value) })
+    }
+
     /// Decodes a response body, reporting failures as ``ChatError/decodingError(_:)``.
     public static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do {
