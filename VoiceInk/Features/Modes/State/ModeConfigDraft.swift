@@ -27,6 +27,10 @@ struct ModeConfigDraft {
 
     private var sourceConfig: ModeConfig?
 
+    // Reasoning is saved per provider and model, not per mode. Choices made in the
+    // form wait here until Save, keyed by `EnhancementReasoningSettings.storageKey`.
+    private var pendingReasoningLevels: [String: ReasoningLevel?] = [:]
+
     init(mode: ConfigurationMode, modeManager: ModeManager) {
         switch mode {
         case .add:
@@ -219,6 +223,31 @@ struct ModeConfigDraft {
             updatedConfig.isDefault = savedIsDefault
             return updatedConfig
         }
+    }
+
+    func reasoningLevel(for provider: AIProvider, model: String) -> ReasoningLevel? {
+        let key = EnhancementReasoningSettings.storageKey(provider: provider, model: model)
+        if let pendingLevel = pendingReasoningLevels[key] {
+            return pendingLevel
+        }
+        return EnhancementReasoningSettings.savedLevel(for: provider, model: model)
+    }
+
+    mutating func setReasoningLevel(_ level: ReasoningLevel?, for provider: AIProvider, model: String) {
+        let key = EnhancementReasoningSettings.storageKey(provider: provider, model: model)
+        pendingReasoningLevels[key] = .some(level)
+    }
+
+    /// Saves the reasoning choice for the provider and model this mode uses.
+    func commitReasoningLevel() {
+        guard let provider = selectedAIProvider.flatMap(AIProvider.init(rawValue:)),
+            let model = selectedAIModel, !model.isEmpty
+        else {
+            return
+        }
+        let key = EnhancementReasoningSettings.storageKey(provider: provider, model: model)
+        guard let pendingLevel = pendingReasoningLevels[key] else { return }
+        EnhancementReasoningSettings.setLevel(pendingLevel, for: provider, model: model)
     }
 
     private func makeCustomCommand() -> ModeCustomCommand? {

@@ -350,6 +350,9 @@ struct DictionarySettingsPanel: View {
                 EnhancementModelPicker(title: "AI Model", provider: provider,
                     models: reviewModels(for: provider),
                     savedCustomModelID: reviewerModel, draftModel: $reviewerModel)
+                SavedEnhancementReasoningPicker(provider: provider, modelName: reviewerModel,
+                    openRouterModel: provider == .openRouter
+                        ? reviewerAIService.openRouterModelMetadata(for: reviewerModel) : nil)
             }
             if !reviewProviders.contains(provider) {
                 Text("Connect this provider in AI Models to resume Auto-Learn review.")

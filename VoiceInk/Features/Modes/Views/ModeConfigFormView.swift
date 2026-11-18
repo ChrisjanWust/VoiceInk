@@ -476,6 +476,8 @@ struct ModeConfigFormView: View {
                     }
                 }
 
+                reasoningPicker(for: provider, model: modelBinding.wrappedValue)
+
                 if provider == .openRouter {
                     Button("Refresh Models") {
                         Task { await aiService.fetchOpenRouterModels() }
@@ -484,6 +486,24 @@ struct ModeConfigFormView: View {
                 }
             }
         }
+    }
+
+    private func reasoningPicker(for provider: AIProvider, model: String) -> some View {
+        EnhancementReasoningPicker(
+            provider: provider,
+            modelName: model,
+            openRouterModel: provider == .openRouter ? aiService.openRouterModelMetadata(for: model) : nil,
+            level: Binding(
+                get: { draft.reasoningLevel(for: provider, model: model) },
+                set: { level in
+                    // Save the model the form shows, so the choice applies to it.
+                    if draft.selectedAIModel?.isEmpty ?? true {
+                        draft.selectedAIModel = model
+                    }
+                    draft.setReasoningLevel(level, for: provider, model: model)
+                }
+            )
+        )
     }
 
     private func aiModelOptions(for provider: AIProvider) -> [String] {

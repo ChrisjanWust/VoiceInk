@@ -121,6 +121,8 @@ struct ModeConfigEditorView: View {
             return
         }
 
+        draft.commitReasoningLevel()
+
         switch mode {
         case .add:
             modeManager.addConfiguration(config)
