@@ -694,7 +694,7 @@ class AIService: ObservableObject {
         case .gemini:
             result = await GeminiLLMClient.verifyAPIKey(key)
         case .bedrock:
-            result = await BedrockConverseClient.verifyAPIKey(
+            result = await BedrockEnhancementClient.verifyAPIKey(
                 key,
                 region: BedrockRegion.current,
                 modelID: verificationModel

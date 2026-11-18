@@ -1,5 +1,4 @@
 import Foundation
-import LLMkit
 import VoiceInkChat
 
 struct AIChatCompletionResult: Sendable {
@@ -43,7 +42,6 @@ extension AIService {
             )
         )
         .raised(toAtLeast: provider == .bedrock ? BedrockModelCatalog.minimumTimeout(forModel: resolvedModel) : nil)
-        let llmkitMessages = messages.map { ChatMessage(role: $0.role.rawValue, content: $0.content) }
 
         var request = ChatRequest(
             model: resolvedModel,
@@ -54,8 +52,6 @@ extension AIService {
         )
         let client: any ChatClient
 
-        // Groups not yet on VoiceInkChat return from their case.
-        let result: String
         switch provider {
         case .gemini:
             request.reasoning = ReasoningConfig.geminiThinkingLevel(for: resolvedModel, level: reasoningLevel)
@@ -85,19 +81,16 @@ extension AIService {
                 preferences: policy.provider
             )
         case .bedrock:
-            result = try await bedrockChatCompletion(
-                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                model: resolvedModel,
-                messages: llmkitMessages,
-                systemPrompt: systemPrompt,
-                reasoning: BedrockReasoning.fields(
-                    for: reasoningLevel,
-                    model: reasoningModelInfo(for: .bedrock, model: resolvedModel).bedrockModel
-                ),
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
+            let reasoning = BedrockReasoning.fields(
+                for: reasoningLevel,
+                model: reasoningModelInfo(for: .bedrock, model: resolvedModel).bedrockModel
             )
-            return AIChatCompletionResult(text: result, openRouterResult: nil)
+            request.maxTokens = reasoning?.maxTokens
+            client = BedrockEnhancementClient(
+                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                region: BedrockRegion.current,
+                additionalModelRequestFields: reasoning?.additionalModelRequestFields ?? [:]
+            )
         case .custom:
             guard
                 let customConfiguration = CustomAIProviderManager.shared.requestConfiguration(forModel: resolvedModel),
@@ -127,11 +120,11 @@ extension AIService {
             )
             client = try ollamaChatClient()
         case .localCLI:
-            result = try await enhanceWithLocalCLI(
+            let text = try await enhanceWithLocalCLI(
                 systemPrompt: systemPrompt ?? "",
-                userPrompt: localUserPrompt ?? chatPrompt(from: llmkitMessages)
+                userPrompt: localUserPrompt ?? chatPrompt(from: messages)
             )
-            return AIChatCompletionResult(text: result, openRouterResult: nil)
+            return AIChatCompletionResult(text: text, openRouterResult: nil)
         default:
             guard let chatProvider = provider.openAICompatibleChatProvider else {
                 throw EnhancementError.notConfigured
@@ -152,7 +145,17 @@ extension AIService {
 
         // Fast mode's fields go last, so they win over anything else in the body.
         request.extraBody.merge(fastMode?.bodyFields ?? [:]) { _, fast in fast }
-        let completion = try await client.complete(request)
+        let completion: ChatResult
+        do {
+            completion = try await client.complete(request)
+        } catch let error as BedrockError {
+            switch error {
+            case .timeout: throw EnhancementError.timeout
+            case .outputTruncated: throw EnhancementError.outputTruncated
+            case .missingAPIKey: throw EnhancementError.notConfigured
+            default: throw EnhancementError.customError(error.localizedDescription)
+            }
+        }
         try Self.requireFinishedAnswer(completion, from: provider)
         return AIChatCompletionResult(text: completion.text, openRouterResult: provider == .openRouter ? completion : nil)
     }
@@ -219,85 +222,11 @@ extension AIService {
         return key
     }
 
-    private func bedrockChatCompletion(
-        apiKey: String,
-        model: String,
-        messages: [ChatMessage],
-        systemPrompt: String?,
-        reasoning: BedrockReasoningFields?,
-        timeout: TimeInterval,
-        retryOnTimeout: Bool
-    ) async throws -> String {
-        // Converse takes the system prompt as its own field, like Anthropic's Messages API.
-        let systemMessages = messages.filter { $0.role == "system" }.map(\.content)
-        let system = systemPrompt ?? (systemMessages.isEmpty ? nil : systemMessages.joined(separator: "\n"))
-        // Converse requires turns to alternate and start with the user. The Assistant can leave two user
-        // turns in a row after a failed reply, so merge same-role neighbours and drop a leading assistant turn.
-        var bedrockMessages: [BedrockMessage] = []
-        for message in messages {
-            let role: BedrockMessage.Role
-            switch message.role {
-            case "user":
-                role = .user
-            case "assistant":
-                role = .assistant
-            default:
-                continue
-            }
-            if bedrockMessages.isEmpty, role == .assistant {
-                continue
-            }
-            if let last = bedrockMessages.last, last.role == role {
-                bedrockMessages[bedrockMessages.count - 1] = BedrockMessage(
-                    role: role,
-                    text: last.text + "\n\n" + message.content
-                )
-            } else {
-                bedrockMessages.append(BedrockMessage(role: role, text: message.content))
-            }
-        }
-
-        do {
-            let completion = try await BedrockConverseClient.converse(
-                apiKey: apiKey,
-                region: BedrockRegion.current,
-                modelID: model,
-                systemPrompt: system,
-                messages: bedrockMessages,
-                reasoning: reasoning,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
-            )
-            return completion.text
-        } catch let error as BedrockError {
-            switch error {
-            case .timeout:
-                throw EnhancementError.timeout
-            case .outputTruncated:
-                throw EnhancementError.outputTruncated
-            case .missingAPIKey:
-                throw EnhancementError.notConfigured
-            default:
-                throw EnhancementError.customError(error.localizedDescription)
-            }
-        }
-    }
-
-    private func chatPrompt(from messages: [ChatMessage]) -> String {
+    /// The conversation as one prompt, for Local CLI, which takes a single input.
+    private func chatPrompt(from messages: [ChatRequest.Message]) -> String {
         let formattedMessages = messages.map { message in
-            let label: String
-            switch message.role {
-            case "assistant":
-                label = "assistant"
-            case "user":
-                label = "user"
-            case "system":
-                label = "system"
-            default:
-                label = "other"
-            }
-            return """
-                <message role="\(label)">
+            """
+                <message role="\(message.role.rawValue)">
                 \(message.content)
                 </message>
                 """

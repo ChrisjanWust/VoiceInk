@@ -44,8 +44,17 @@ enum BedrockModelCatalog {
         return models.map(\.invocationID)
     }
 
+    /// Accepts keys pasted with a `Bearer ` prefix.
+    static func normalizedAPIKey(_ apiKey: String) -> String {
+        var key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if key.lowercased().hasPrefix("bearer ") {
+            key = String(key.dropFirst("bearer ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return key
+    }
+
     static func fetchModels(apiKey: String, region: String, timeout: TimeInterval = 15) async throws -> [BedrockModelInfo] {
-        let key = BedrockConverseClient.normalizedAPIKey(apiKey)
+        let key = normalizedAPIKey(apiKey)
         guard !key.isEmpty else { throw ProviderModelCatalog.CatalogError.missingAPIKey }
         let normalizedRegion = BedrockRegion.normalized(region)
         guard BedrockRegion.isValid(normalizedRegion) else { throw BedrockError.invalidRegion(region) }
