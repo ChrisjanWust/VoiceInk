@@ -492,7 +492,7 @@ struct ModeConfigFormView: View {
         EnhancementReasoningPicker(
             provider: provider,
             modelName: model,
-            openRouterModel: provider == .openRouter ? aiService.openRouterModelMetadata(for: model) : nil,
+            modelInfo: aiService.reasoningModelInfo(for: provider, model: model),
             level: Binding(
                 get: { draft.reasoningLevel(for: provider, model: model) },
                 set: { level in

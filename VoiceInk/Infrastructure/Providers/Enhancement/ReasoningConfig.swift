@@ -1,6 +1,14 @@
 import Foundation
 import LLMkit
 
+/// What VoiceInk knows about a model's reasoning support beyond its ID.
+struct ReasoningModelInfo {
+    /// The OpenRouter catalog entry, when the catalog has loaded.
+    var openRouterModel: OpenRouterModel? = nil
+    /// Whether an Ollama model lists the "thinking" capability. `nil` when unknown.
+    var ollamaSupportsThinking: Bool? = nil
+}
+
 /// Reasoning parameters for enhancement requests.
 ///
 /// Each provider has two parts here:
@@ -87,39 +95,6 @@ struct ReasoningConfig {
         "gpt-5.4-mini",
         "gpt-5.4-nano",
     ]
-
-    // Accept none, low, medium, high, xhigh, and max.
-    static let openAIMaxEffortModels: Set<String> = [
-        "gpt-6-luna",
-        "gpt-6-sol",
-        "gpt-5.6-luna",
-        "gpt-5.6-terra",
-        "gpt-5.6-sol",
-    ]
-
-    // Accept none, low, medium, high, and xhigh.
-    static let openAIXHighEffortModels: Set<String> = [
-        "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.4-nano",
-    ]
-
-    // Non-reasoning models reject `reasoning_effort`.
-    static let openAINonReasoningModelPrefixes = ["gpt-4", "gpt-3.5", "chatgpt-4o"]
-
-    private static func openAILevels(for modelName: String) -> [ReasoningLevel] {
-        if openAINonReasoningModelPrefixes.contains(where: { modelName.hasPrefix($0) }) {
-            return []
-        }
-        if openAIMaxEffortModels.contains(modelName) {
-            return [.off, .low, .medium, .high, .xhigh, .max]
-        }
-        if openAIXHighEffortModels.contains(modelName) {
-            return [.off, .low, .medium, .high, .xhigh]
-        }
-        return openAICompatibleEffortLevels
-    }
 
     // MARK: - Cerebras
 
@@ -215,11 +190,9 @@ struct ReasoningConfig {
     static func supportedLevels(
         for provider: AIProvider,
         modelName: String,
-        openRouterModel: OpenRouterModel? = nil
+        modelInfo: ReasoningModelInfo = ReasoningModelInfo()
     ) -> [ReasoningLevel] {
         switch provider {
-        case .openAI:
-            return openAILevels(for: modelName)
         case .gemini:
             return geminiLevels(for: modelName)
         case .cerebras:
@@ -227,15 +200,18 @@ struct ReasoningConfig {
         case .groq:
             return groqLevels(for: modelName)
         case .openRouter:
-            return openRouterLevels(for: openRouterModel)
+            return openRouterLevels(for: modelInfo.openRouterModel)
         case .ollama:
-            // LLMkit sends `think` as a Bool, so Ollama's "low"/"medium"/"high" are not available.
-            return [.enabled]
+            // Ollama rejects `think: true` for models without the thinking capability.
+            // LLMkit sends `think` as a Bool, so "low"/"medium"/"high" are not available.
+            return modelInfo.ollamaSupportsThinking == false ? [] : [.enabled]
         case .custom:
             return openAICompatibleEffortLevels
-        case .anthropic, .mistral:
-            // Need LLMkit support: Anthropic `output_config.effort`, and Mistral's
-            // chunked `content` that holds thinking.
+        case .openAI, .anthropic, .mistral:
+            // Need LLMkit support. OpenAI GPT-5 models reject `temperature` unless
+            // `reasoning_effort` is "none", and OpenAILLMClient always sends it.
+            // Anthropic needs `output_config.effort`; Mistral returns thinking as
+            // chunked `content` that OpenAILLMClient can't decode.
             return []
         default:
             // Transcription-only providers, VoiceInk Refine, Local CLI, and any
@@ -249,10 +225,10 @@ struct ReasoningConfig {
         _ level: ReasoningLevel?,
         for provider: AIProvider,
         modelName: String,
-        openRouterModel: OpenRouterModel? = nil
+        modelInfo: ReasoningModelInfo = ReasoningModelInfo()
     ) -> ReasoningLevel? {
         guard let level,
-            supportedLevels(for: provider, modelName: modelName, openRouterModel: openRouterModel).contains(level)
+            supportedLevels(for: provider, modelName: modelName, modelInfo: modelInfo).contains(level)
         else {
             return nil
         }
@@ -264,7 +240,7 @@ struct ReasoningConfig {
     static func defaultLevel(
         for provider: AIProvider,
         modelName: String,
-        openRouterModel: OpenRouterModel? = nil
+        modelInfo: ReasoningModelInfo = ReasoningModelInfo()
     ) -> ReasoningLevel? {
         switch provider {
         case .gemini:
@@ -276,7 +252,7 @@ struct ReasoningConfig {
             case nil: return geminiThinkingOffByDefaultModels.contains(modelName) ? .off : nil
             }
         case .openRouter:
-            guard let openRouterModel,
+            guard let openRouterModel = modelInfo.openRouterModel,
                 openRouterModel.supportedParameters.contains("reasoning"),
                 let capabilities = openRouterModel.reasoning
             else {
@@ -352,7 +328,7 @@ struct ReasoningConfig {
     // MARK: - Ollama
 
     /// Ollama's `think` value. Default keeps thinking off for low latency.
-    static func ollamaThink(level: ReasoningLevel?, modelName: String) -> Bool {
-        effectiveLevel(level, for: .ollama, modelName: modelName) == .enabled
+    static func ollamaThink(level: ReasoningLevel?, modelName: String, modelInfo: ReasoningModelInfo) -> Bool {
+        effectiveLevel(level, for: .ollama, modelName: modelName, modelInfo: modelInfo) == .enabled
     }
 }

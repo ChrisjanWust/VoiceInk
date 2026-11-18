@@ -1,4 +1,3 @@
-import LLMkit
 import SwiftUI
 
 /// Picks the reasoning level for one enhancement model. Shown below the model picker,
@@ -6,14 +5,14 @@ import SwiftUI
 struct EnhancementReasoningPicker: View {
     let provider: AIProvider
     let modelName: String
-    var openRouterModel: OpenRouterModel? = nil
+    var modelInfo = ReasoningModelInfo()
     @Binding var level: ReasoningLevel?
 
     private var levels: [ReasoningLevel] {
         ReasoningConfig.supportedLevels(
             for: provider,
             modelName: modelName,
-            openRouterModel: openRouterModel
+            modelInfo: modelInfo
         )
     }
 
@@ -30,7 +29,7 @@ struct EnhancementReasoningPicker: View {
             let defaultLevel = ReasoningConfig.defaultLevel(
                 for: provider,
                 modelName: modelName,
-                openRouterModel: openRouterModel
+                modelInfo: modelInfo
             )
         else {
             return String(localized: "Default")
@@ -61,7 +60,7 @@ struct EnhancementReasoningPicker: View {
 struct SavedEnhancementReasoningPicker: View {
     let provider: AIProvider
     let modelName: String
-    var openRouterModel: OpenRouterModel? = nil
+    var modelInfo = ReasoningModelInfo()
 
     // UserDefaults dictionaries aren't observable, so redraw after each save.
     @State private var saveCount = 0
@@ -71,7 +70,7 @@ struct SavedEnhancementReasoningPicker: View {
         EnhancementReasoningPicker(
             provider: provider,
             modelName: modelName,
-            openRouterModel: openRouterModel,
+            modelInfo: modelInfo,
             level: Binding(
                 get: { EnhancementReasoningSettings.savedLevel(for: provider, model: modelName) },
                 set: { newLevel in

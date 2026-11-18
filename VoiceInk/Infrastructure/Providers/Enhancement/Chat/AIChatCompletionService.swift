@@ -98,7 +98,11 @@ extension AIService {
                 text: localUserPrompt ?? chatPrompt(from: messages),
                 systemPrompt: systemPrompt ?? "",
                 model: resolvedModel,
-                think: ReasoningConfig.ollamaThink(level: reasoningLevel, modelName: resolvedModel),
+                think: ReasoningConfig.ollamaThink(
+                    level: reasoningLevel,
+                    modelName: resolvedModel,
+                    modelInfo: reasoningModelInfo(for: .ollama, model: resolvedModel)
+                ),
                 timeout: timeout,
                 retryOnTimeout: retryOnTimeout
             )

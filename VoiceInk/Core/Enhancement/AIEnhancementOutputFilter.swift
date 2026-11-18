@@ -9,10 +9,9 @@ struct AIEnhancementOutputFilter {
         for tag in reasoningTags {
             // Complete blocks: <think>…</think>
             processedText = replacing(#"(?s)<\#(tag)>.*?</\#(tag)>"#, in: processedText)
-            // Reasoning whose opening tag was in the prompt template: "…</think>answer"
-            processedText = replacing(#"(?s)\A.*</\#(tag)>"#, in: processedText)
-            // Reasoning cut off before its closing tag: "answer<think>…"
-            processedText = replacing(#"(?s)<\#(tag)>.*\z"#, in: processedText)
+            // A response that opens with reasoning and never closes it (cut off) has
+            // no answer. Anchored to the start so a dictated mention of a tag survives.
+            processedText = replacing(#"(?s)\A\s*<\#(tag)>.*\z"#, in: processedText)
         }
 
         return processedText.trimmingCharacters(in: .whitespacesAndNewlines)

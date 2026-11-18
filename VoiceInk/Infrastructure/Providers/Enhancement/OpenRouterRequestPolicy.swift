@@ -13,16 +13,20 @@ struct OpenRouterRequestPolicy {
         reasoningLevel: ReasoningLevel? = nil
     ) -> OpenRouterRequestPolicy {
         let supportedParameters = Set(modelMetadata?.supportedParameters ?? [])
-        let selectedReasoning = ReasoningConfig.effectiveLevel(
+        let selectedLevel = ReasoningConfig.effectiveLevel(
             reasoningLevel,
             for: .openRouter,
             modelName: modelName,
-            openRouterModel: modelMetadata
-        ).map { reasoning(for: $0, capabilities: modelMetadata?.reasoning) }
+            modelInfo: ReasoningModelInfo(openRouterModel: modelMetadata)
+        )
+        let selectedReasoning = selectedLevel.map { reasoning(for: $0, capabilities: modelMetadata?.reasoning) }
+        // Reasoning models such as OpenAI GPT-5 reject `temperature` once reasoning is on.
+        let sendsTemperature = supportedParameters.contains("temperature")
+            && (selectedLevel == nil || selectedLevel == .off)
 
         return OpenRouterRequestPolicy(
             model: nitroVariant(of: modelName),
-            temperature: supportedParameters.contains("temperature") ? 0.3 : nil,
+            temperature: sendsTemperature ? 0.3 : nil,
             reasoning: selectedReasoning ?? reasoningConfiguration(
                 capabilities: modelMetadata?.reasoning,
                 supportsReasoningParameter: supportedParameters.contains("reasoning")

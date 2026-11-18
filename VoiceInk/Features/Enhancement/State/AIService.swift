@@ -775,6 +775,17 @@ class AIService: ObservableObject {
         openRouterModelCatalog.first(where: { $0.id == modelName })
     }
 
+    func reasoningModelInfo(for provider: AIProvider, model: String) -> ReasoningModelInfo {
+        switch provider {
+        case .openRouter:
+            return ReasoningModelInfo(openRouterModel: openRouterModelMetadata(for: model))
+        case .ollama:
+            return ReasoningModelInfo(ollamaSupportsThinking: ollamaService.thinkingSupport[model])
+        default:
+            return ReasoningModelInfo()
+        }
+    }
+
     @MainActor
     func fetchOpenRouterModelsIfNeededForMigration() async {
         guard openRouterModelCatalog.isEmpty,
