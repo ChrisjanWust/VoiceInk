@@ -21,8 +21,6 @@ struct OllamaGenerateRequest {
     var system: String
     var temperature: Double?
     var think: OllamaThink?
-    /// Extra top-level body fields, merged last so they win.
-    var extraBody: [String: Any] = [:]
 
     var jsonBody: [String: Any] {
         var body: [String: Any] = [
@@ -34,15 +32,8 @@ struct OllamaGenerateRequest {
         // Same as LLMkit: `options` is only sent when it has a value.
         if let temperature { body["options"] = ["temperature": temperature] }
         if let think { body["think"] = think.jsonValue }
-        body.merge(extraBody) { _, extra in extra }
         return body
     }
-}
-
-struct OllamaGenerateResult: Equatable, Sendable {
-    /// The answer. Ollama returns reasoning separately, in `thinking`.
-    let response: String
-    let thinking: String?
 }
 
 /// Client for Ollama's native generate API (`POST {baseURL}/api/generate`), non-streaming.
@@ -50,12 +41,13 @@ struct OllamaGenerateResult: Equatable, Sendable {
 /// LLMkit's `OllamaClient.generate` only takes `think` as a Bool, so VoiceInk uses this client
 /// for requests with a named thinking level.
 enum OllamaGenerateClient {
+    /// Returns the answer. Ollama returns reasoning separately, in `thinking`, which isn't read.
     static func generate(
         baseURL: URL,
         request: OllamaGenerateRequest,
         timeout: TimeInterval,
         retryOnTimeout: Bool
-    ) async throws -> OllamaGenerateResult {
+    ) async throws -> String {
         let urlRequest = try ChatHTTP.jsonRequest(
             url: baseURL.appendingPathComponent("api/generate"),
             body: request.jsonBody
@@ -67,12 +59,10 @@ enum OllamaGenerateClient {
             retryOnTimeout: retryOnTimeout,
             retryableStatusCodes: ChatHTTP.defaultRetryableStatusCodes
         )
-        let decoded = try ChatHTTP.decode(ResponseBody.self, from: data)
-        return OllamaGenerateResult(response: decoded.response, thinking: decoded.thinking)
+        return try ChatHTTP.decode(ResponseBody.self, from: data).response
     }
 
     private struct ResponseBody: Decodable {
         let response: String
-        let thinking: String?
     }
 }

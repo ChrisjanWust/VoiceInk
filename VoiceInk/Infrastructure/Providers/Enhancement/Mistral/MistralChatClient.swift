@@ -10,12 +10,6 @@ struct MistralChatRequest {
     var temperature: Double? = 0.3
     /// `reasoning_effort`, such as `"none"` or `"high"`.
     var reasoningEffort: String?
-    var maxTokens: Int?
-    /// Extra top-level body fields, merged last so they win (for example Fast mode's
-    /// `FastModeRequestParameters.bodyFields`).
-    var extraBody: [String: Any] = [:]
-    /// Extra HTTP headers, such as a beta header.
-    var extraHeaders: [String: String] = [:]
 
     /// Builds a request the way LLMkit's `OpenAILLMClient` does: a non-empty system prompt
     /// goes first as a system message.
@@ -36,8 +30,6 @@ struct MistralChatRequest {
         ]
         if let temperature { body["temperature"] = temperature }
         if let reasoningEffort { body["reasoning_effort"] = reasoningEffort }
-        if let maxTokens { body["max_tokens"] = maxTokens }
-        body.merge(extraBody) { _, extra in extra }
         return body
     }
 }
@@ -76,8 +68,11 @@ enum MistralChatClient {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw LLMKitError.missingAPIKey
         }
-        let headers = request.extraHeaders.merging(["Authorization": "Bearer \(apiKey)"]) { _, auth in auth }
-        return try ChatHTTP.jsonRequest(url: endpoint, body: request.jsonBody, headers: headers)
+        return try ChatHTTP.jsonRequest(
+            url: endpoint,
+            body: request.jsonBody,
+            headers: ["Authorization": "Bearer \(apiKey)"]
+        )
     }
 
     static func decodeResult(from data: Data) throws -> MistralChatResult {
