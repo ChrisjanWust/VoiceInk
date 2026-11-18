@@ -102,11 +102,13 @@ enum AIProvider: String, CaseIterable, Sendable {
     var availableModels: [String] {
         switch self {
         case .cerebras:
+            // Offline fallback; AIService replaces it with the live list once a key is set.
             return [
                 "qwen-3.8-27b",
                 "gpt-oss-120b",
             ]
         case .groq:
+            // Offline fallback; AIService replaces it with the live list once a key is set.
             return [
                 "qwen/qwen3.8-27b",
                 "openai/gpt-oss-120b",
@@ -125,6 +127,7 @@ enum AIProvider: String, CaseIterable, Sendable {
                 "gemini-3.1-flash-lite",
             ]
         case .anthropic:
+            // Offline fallback; AIService replaces it with the live list once a key is set.
             return [
                 "claude-sonnet-5-5",
                 "claude-haiku-5-5",
@@ -143,11 +146,12 @@ enum AIProvider: String, CaseIterable, Sendable {
                 "gpt-5.4-mini",
             ]
         case .mistral:
+            // Offline fallback; AIService replaces it with the live list once a key is set.
+            // No Mistral Large 4 (`mistral-large-4`, `mistral-large-latest`): it always reasons,
+            // so its replies come as thinking and text chunks that LLMkit can't read.
             return [
                 "mistral-small-latest",
                 "mistral-medium-latest",
-                "mistral-large-4",
-                "mistral-large-latest",
             ]
         case .bedrock:
             // Each one answered VoiceInk's Default prompt in under 4 s in live tests on 2026-11-18.
@@ -201,9 +205,13 @@ enum AIProvider: String, CaseIterable, Sendable {
     }
 
     /// Providers whose enhancement model list is fetched from their models endpoint.
+    /// Custom providers list their models in the custom model editor instead, since each
+    /// one has its own endpoint and key.
     var fetchesLiveModelList: Bool {
         switch self {
         case .gemini, .openAI:
+            return true
+        case .anthropic, .groq, .cerebras, .mistral:
             return true
         default:
             return false
@@ -515,6 +523,7 @@ class AIService: ObservableObject {
         }
 
         openRouterModels = OpenRouterCatalogStore.shared.legacyEnhancementModelIDs
+            .filter { !GeminiModelMigration.isUnsupported($0) }
     }
 
     private func saveOpenRouterModels() {
@@ -523,6 +532,8 @@ class AIService: ObservableObject {
     }
 
     private func isOpenRouterEnhancementModel(_ model: OpenRouterModel) -> Bool {
+        // VoiceInk only offers Gemini 3 and later.
+        if GeminiModelMigration.isUnsupported(model.id) { return false }
         guard let architecture = model.architecture else { return true }
         return architecture.inputModalities.contains("text")
             && architecture.outputModalities.contains("text")
@@ -878,7 +889,7 @@ class AIService: ObservableObject {
         }
     }
 
-    // MARK: - Live Gemini and OpenAI model lists
+    // MARK: - Live model lists
 
     /// Keeps the cached live lists tied to a saved key: drops a list when its key is removed,
     /// and fetches one for a newly added key.
@@ -900,8 +911,8 @@ class AIService: ObservableObject {
         }
     }
 
-    /// Refreshes the Gemini and OpenAI model lists at launch when a key is saved and the
-    /// cached list is missing or older than a day.
+    /// Refreshes the live model lists at launch when a key is saved and the cached list is
+    /// missing or older than a day.
     @MainActor
     func refreshLiveProviderModelsIfNeeded() async {
         for provider in AIProvider.allCases where provider.fetchesLiveModelList {
@@ -939,6 +950,14 @@ class AIService: ObservableObject {
                 switch provider {
                 case .gemini:
                     return try await ProviderModelCatalog.fetchGeminiModelIDs(apiKey: apiKey)
+                case .anthropic:
+                    return try await ProviderModelCatalog.fetchAnthropicModelIDs(apiKey: apiKey)
+                case .groq:
+                    return try await ProviderModelCatalog.fetchGroqModelIDs(apiKey: apiKey)
+                case .cerebras:
+                    return try await ProviderModelCatalog.fetchCerebrasModelIDs(apiKey: apiKey)
+                case .mistral:
+                    return try await ProviderModelCatalog.fetchMistralModelIDs(apiKey: apiKey)
                 default:
                     return try await ProviderModelCatalog.fetchOpenAIModelIDs(apiKey: apiKey)
                 }
@@ -965,9 +984,13 @@ class AIService: ObservableObject {
     /// unless reasoning effort is `none`. So only offer the OpenAI models whose Default
     /// request VoiceInk has made work: `none`, or `temperature: null` for models that
     /// reject `none`.
+    ///
+    /// A model that a retired-model migration remaps (Cerebras still serving an ID VoiceInk
+    /// treats as retired, say) would silently run as another model, so it isn't offered.
     private func usableLiveModels(_ models: [String], for provider: AIProvider) -> [String] {
-        guard provider == .openAI else { return models }
-        return models.filter(ReasoningConfig.isOpenAIDefaultRequestSupported)
+        let current = models.filter { EnhancementModelMigration.resolvedModel($0, for: provider) == $0 }
+        guard provider == .openAI else { return current }
+        return current.filter(ReasoningConfig.isOpenAIDefaultRequestSupported)
     }
 
     /// Puts the default model first so the picker opens on the recommended choice.
