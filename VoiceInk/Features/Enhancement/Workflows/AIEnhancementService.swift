@@ -389,10 +389,11 @@ class AIEnhancementService: ObservableObject {
         var didUpdateModes = false
 
         for index in updatedConfigurations.indices {
-            if updatedConfigurations[index].selectedAIProvider == AIProvider.gemini.rawValue,
+            if let provider = AIProvider(rawValue: updatedConfigurations[index].selectedAIProvider ?? ""),
+                provider == .gemini || provider == .openRouter,
                 let modelName = updatedConfigurations[index].selectedAIModel
             {
-                let currentModel = GeminiModelMigration.resolvedModel(modelName, for: .gemini)
+                let currentModel = GeminiModelMigration.resolvedModel(modelName, for: provider)
                 if currentModel != modelName {
                     updatedConfigurations[index].selectedAIModel = currentModel
                     didUpdateModes = true

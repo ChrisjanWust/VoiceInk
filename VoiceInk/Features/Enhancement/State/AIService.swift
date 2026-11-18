@@ -523,6 +523,7 @@ class AIService: ObservableObject {
         }
 
         openRouterModels = OpenRouterCatalogStore.shared.legacyEnhancementModelIDs
+            .filter { !GeminiModelMigration.isUnsupported($0) }
     }
 
     private func saveOpenRouterModels() {
@@ -531,6 +532,8 @@ class AIService: ObservableObject {
     }
 
     private func isOpenRouterEnhancementModel(_ model: OpenRouterModel) -> Bool {
+        // VoiceInk only offers Gemini 3 and later.
+        if GeminiModelMigration.isUnsupported(model.id) { return false }
         guard let architecture = model.architecture else { return true }
         return architecture.inputModalities.contains("text")
             && architecture.outputModalities.contains("text")
