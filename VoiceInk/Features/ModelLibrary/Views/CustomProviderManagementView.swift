@@ -392,9 +392,39 @@ struct CustomEnhancementModelEditorPanel: View {
     @State private var isSaving = false
     @State private var connectionTest: ConnectionTestState = .idle
     @State private var connectionTestTask: Task<Void, Never>?
+    @State private var listedModels: [String] = []
+    @State private var isLoadingListedModels = false
 
     private var isEditing: Bool {
         editingProvider != nil
+    }
+
+    /// Changes whenever the endpoint or key changes, so the model list reloads.
+    private var modelListRequestID: String {
+        baseURL.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+            + apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Loads the endpoint's `/models` list so the model name can be picked instead of
+    /// typed. Endpoints without one fail quietly and the typed name is kept.
+    private func loadListedModels() async {
+        let url = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        listedModels = []
+        isLoadingListedModels = false
+        guard !key.isEmpty, ProviderModelCatalog.customModelsEndpoint(forChatCompletionsURL: url) != nil else {
+            return
+        }
+
+        // Wait for typing to pause before calling the endpoint.
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        guard !Task.isCancelled else { return }
+
+        isLoadingListedModels = true
+        let models = (try? await ProviderModelCatalog.fetchCustomModelIDs(chatCompletionsURL: url, apiKey: key)) ?? []
+        guard !Task.isCancelled else { return }
+        listedModels = models
+        isLoadingListedModels = false
     }
 
     private var canTestConnection: Bool {
@@ -445,6 +475,11 @@ struct CustomEnhancementModelEditorPanel: View {
                                 label: "API Key", placeholder: String(localized: "Paste API key"), text: $apiKey,
                                 isSecure: true)
                             CustomModelTextField(label: "Model Name", placeholder: "gpt-5.5", text: $modelName)
+                            ListedModelsRow(
+                                models: listedModels,
+                                isLoading: isLoadingListedModels,
+                                selection: $modelName
+                            )
                             ConnectionTestRow(
                                 state: connectionTest, isDisabled: !canTestConnection, action: runConnectionTest)
                         }
@@ -481,6 +516,7 @@ struct CustomEnhancementModelEditorPanel: View {
         .onChange(of: baseURL) { _, _ in resetConnectionTest() }
         .onChange(of: apiKey) { _, _ in resetConnectionTest() }
         .onChange(of: modelName) { _, _ in resetConnectionTest() }
+        .task(id: modelListRequestID) { await loadListedModels() }
     }
 
     private var canSave: Bool {
@@ -628,6 +664,55 @@ private struct CustomModelTextField: View {
             .frame(maxWidth: CustomModelEditorMetrics.fieldMaxWidth, alignment: .trailing)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A menu of the models the custom endpoint lists, under the Model Name field. Shows
+/// nothing when the endpoint has no list.
+private struct ListedModelsRow: View {
+    let models: [String]
+    let isLoading: Bool
+    @Binding var selection: String
+
+    var body: some View {
+        if isLoading || !models.isEmpty {
+            HStack(spacing: 12) {
+                Spacer()
+                    .frame(width: CustomModelEditorMetrics.labelWidth)
+
+                Group {
+                    if isLoading {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Loading models")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Menu {
+                            ForEach(models, id: \.self) { model in
+                                Button {
+                                    selection = model
+                                } label: {
+                                    if model == selection.trimmingCharacters(in: .whitespacesAndNewlines) {
+                                        Label(model, systemImage: "checkmark")
+                                    } else {
+                                        Text(verbatim: model)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Text("Choose from \(models.count) listed models")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                    }
+                }
+                .font(.system(size: 12))
+                .frame(maxWidth: CustomModelEditorMetrics.fieldMaxWidth, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
