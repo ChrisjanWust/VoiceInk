@@ -305,7 +305,8 @@ enum BedrockErrorDescriber {
 ///
 /// `POST https://bedrock-runtime.{region}.amazonaws.com/model/{modelId}/converse`
 ///
-/// No inference or reasoning parameters are sent, so each model runs with its Bedrock defaults.
+/// By default no inference or reasoning parameters are sent, so each model runs with its Bedrock
+/// defaults. A picked reasoning level adds that model's own `additionalModelRequestFields`.
 /// Only `text` content blocks are returned; `reasoningContent` blocks are dropped.
 enum BedrockConverseClient {
     static func converse(
@@ -314,6 +315,7 @@ enum BedrockConverseClient {
         modelID: String,
         systemPrompt: String?,
         messages: [BedrockMessage],
+        reasoning: BedrockReasoningFields? = nil,
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false,
         maxRetries: Int = 2
@@ -324,6 +326,7 @@ enum BedrockConverseClient {
             modelID: modelID,
             systemPrompt: systemPrompt,
             messages: messages,
+            reasoning: reasoning,
             timeout: timeout
         )
         let normalizedRegion = BedrockRegion.normalized(region)
@@ -421,6 +424,7 @@ enum BedrockConverseClient {
         modelID: String,
         systemPrompt: String?,
         messages: [BedrockMessage],
+        reasoning: BedrockReasoningFields? = nil,
         timeout: TimeInterval
     ) throws -> URLRequest {
         let key = normalizedAPIKey(apiKey)
@@ -443,7 +447,7 @@ enum BedrockConverseClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(
-            ConverseRequestBody(systemPrompt: systemPrompt, messages: messages)
+            ConverseRequestBody(systemPrompt: systemPrompt, messages: messages, reasoning: reasoning)
         )
         return request
     }
@@ -540,16 +544,25 @@ private struct ConverseRequestBody: Encodable {
         let content: [TextBlock]
     }
 
+    struct InferenceConfig: Encodable {
+        let maxTokens: Int
+    }
+
     let messages: [Message]
     let system: [TextBlock]?
+    // Left out entirely on Default, so the request matches one with no reasoning level.
+    let additionalModelRequestFields: [String: BedrockJSONValue]?
+    let inferenceConfig: InferenceConfig?
 
-    init(systemPrompt: String?, messages: [BedrockMessage]) {
+    init(systemPrompt: String?, messages: [BedrockMessage], reasoning: BedrockReasoningFields? = nil) {
         self.messages = messages.map { Message(role: $0.role.rawValue, content: [TextBlock(text: $0.text)]) }
         if let systemPrompt, !systemPrompt.isEmpty {
             self.system = [TextBlock(text: systemPrompt)]
         } else {
             self.system = nil
         }
+        self.additionalModelRequestFields = reasoning?.additionalModelRequestFields
+        self.inferenceConfig = reasoning?.maxTokens.map(InferenceConfig.init(maxTokens:))
     }
 }
 

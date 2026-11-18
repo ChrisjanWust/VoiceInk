@@ -260,9 +260,8 @@ struct ReasoningConfig {
             // chunked `content` that holds thinking.
             return []
         case .bedrock:
-            // Converse sends no reasoning parameters, so each Bedrock model runs on its
-            // own default. Mapping levels needs per-model `additionalModelRequestFields`.
-            return []
+            // Read from the model's live catalog schema; custom IDs stay on Default.
+            return BedrockReasoning.levels(for: modelInfo.bedrockModel)
         default:
             // Transcription-only providers, VoiceInk Refine, Local CLI, and any
             // provider without a mapping yet stay on Default.
@@ -314,6 +313,8 @@ struct ReasoningConfig {
             return .off
         case .ollama:
             return .off
+        case .bedrock:
+            return BedrockReasoning.defaultLevel(for: modelInfo.bedrockModel)
         default:
             return getReasoningParameter(for: provider, modelName: modelName)
                 .flatMap(ReasoningLevel.init(effortValue:))
