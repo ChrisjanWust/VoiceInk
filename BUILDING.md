@@ -33,6 +33,14 @@ make local LOCAL_CODESIGN_IDENTITY=-
 
 Local builds do not include iCloud dictionary sync or automatic updates. Ad-hoc builds may require macOS permissions again after rebuilding.
 
+Package the local build into a DMG with an `/Applications` shortcut:
+
+```bash
+make local-dmg
+```
+
+It reads `~/Downloads/VoiceInk.app` and writes `~/Downloads/VoiceInk.dmg`; override either with `LOCAL_DMG_APP=<path>` and `LOCAL_DMG_OUTPUT=<path>`. With `create-dmg` installed (`brew install create-dmg`) it uses the release window layout from `release/dmg/`; otherwise it falls back to a plain `hdiutil` image. The DMG is not signed or notarized.
+
 ## Other Commands
 
 - `make check` — verify required tools

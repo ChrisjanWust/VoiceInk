@@ -5,8 +5,10 @@ FRAMEWORK_PATH := $(WHISPER_CPP_DIR)/build-apple/whisper.xcframework
 LOCAL_DERIVED_DATA := $(CURDIR)/.local-build
 LOCAL_CODESIGN_IDENTITY ?=
 RUN_APP_NAME ?= VoiceInk
+LOCAL_DMG_APP ?= $(HOME)/Downloads/VoiceInk.app
+LOCAL_DMG_OUTPUT ?= $(HOME)/Downloads/VoiceInk.dmg
 
-.PHONY: all clean whisper setup build local check healthcheck help dev run release release-setup
+.PHONY: all clean whisper setup build local local-dmg check healthcheck help dev run release release-setup
 
 # Default target
 all: check build
@@ -102,6 +104,11 @@ local: check setup
 		exit 1; \
 	fi
 
+# Package a local build (default: ~/Downloads/VoiceInk.app from 'make local') into a DMG.
+# Unsigned and not notarized; override LOCAL_DMG_APP / LOCAL_DMG_OUTPUT to change paths.
+local-dmg:
+	@./scripts/local-dmg.sh "$(LOCAL_DMG_APP)" "$(LOCAL_DMG_OUTPUT)"
+
 # Run application
 run:
 	@if [ -d "$$HOME/Downloads/$(RUN_APP_NAME).app" ]; then \
@@ -146,6 +153,8 @@ help:
 	@echo "  build              Build the VoiceInk Xcode project"
 	@echo "  local              Build locally with stable signing when available"
 	@echo "    LOCAL_CODESIGN_IDENTITY=<SHA or name> overrides automatic Apple Development detection"
+	@echo "  local-dmg          Package the local build into a DMG (default ~/Downloads/VoiceInk.app -> ~/Downloads/VoiceInk.dmg)"
+	@echo "    LOCAL_DMG_APP=<path> / LOCAL_DMG_OUTPUT=<path> override the input app and output DMG"
 	@echo "  run                Launch the built VoiceInk app"
 	@echo "  dev                Build and run the app (for development)"
 	@echo "  release            Build DMG and Appcast using release-notes/<version>.html"
