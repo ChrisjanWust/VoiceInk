@@ -777,7 +777,7 @@ class AIService: ObservableObject {
         text: String,
         systemPrompt: String,
         model: String? = nil,
-        think: Bool = false,
+        think: ReasoningConfig.OllamaThink = .enabled(false),
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> String {
@@ -841,7 +841,10 @@ class AIService: ObservableObject {
         case .openRouter:
             return ReasoningModelInfo(openRouterModel: openRouterModelMetadata(for: model))
         case .ollama:
-            return ReasoningModelInfo(ollamaSupportsThinking: ollamaService.thinkingSupport[model])
+            return ReasoningModelInfo(
+                ollamaSupportsThinking: ollamaService.thinkingSupport[model],
+                ollamaThinkingLevels: ollamaService.thinkingLevels[model]
+            )
         default:
             return ReasoningModelInfo()
         }

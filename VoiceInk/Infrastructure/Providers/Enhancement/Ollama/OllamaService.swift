@@ -22,6 +22,9 @@ class OllamaService: ObservableObject {
     /// Whether each installed model lists the "thinking" capability. Models are
     /// missing when the server doesn't report capabilities (older Ollama versions).
     @Published var thinkingSupport: [String: Bool] = [:]
+    /// Named thinking levels per model, from `/api/show`'s `thinking.values` (for example
+    /// `["low", "medium", "high"]` for gpt-oss). Empty for an on/off model, missing when unknown.
+    @Published var thinkingLevels: [String: [String]] = [:]
     @Published var isConnected: Bool = false
     @Published var isLoadingModels: Bool = false
 
@@ -66,6 +69,10 @@ class OllamaService: ObservableObject {
             isConnected = true
             availableModels = models
             thinkingSupport = await fetchThinkingSupport(baseURL: url)
+            thinkingLevels = await fetchThinkingLevels(
+                baseURL: url,
+                models: thinkingSupport.filter(\.value).map(\.key)
+            )
 
             if !models.contains(where: { $0.name == selectedModel }) && !models.isEmpty {
                 selectedModel = models[0].name
@@ -76,6 +83,7 @@ class OllamaService: ObservableObject {
             isConnected = false
             availableModels = []
             thinkingSupport = [:]
+            thinkingLevels = [:]
             return .failure(error)
         }
     }
@@ -101,11 +109,43 @@ class OllamaService: ObservableObject {
         return support
     }
 
+    // `/api/tags` doesn't include `thinking.values`, so ask `/api/show` for each thinking model.
+    private func fetchThinkingLevels(baseURL: URL, models: [String]) async -> [String: [String]] {
+        await withTaskGroup(of: (String, [String]?).self) { group in
+            for model in models {
+                group.addTask {
+                    var request = URLRequest(url: baseURL.appendingPathComponent("api/show"))
+                    request.httpMethod = "POST"
+                    request.timeoutInterval = 10
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": model])
+
+                    guard let (data, response) = try? await URLSession.shared.data(for: request),
+                        let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                        let decoded = try? JSONDecoder().decode(OllamaShowResponse.self, from: data)
+                    else {
+                        return (model, nil)
+                    }
+                    // Booleans in `values` are an on/off switch; strings are named levels.
+                    return (model, decoded.thinking?.values.compactMap(\.level) ?? [])
+                }
+            }
+
+            var levels: [String: [String]] = [:]
+            for await (model, modelLevels) in group {
+                if let modelLevels {
+                    levels[model] = modelLevels
+                }
+            }
+            return levels
+        }
+    }
+
     func enhance(
         _ text: String,
         withSystemPrompt systemPrompt: String? = nil,
         model: String? = nil,
-        think: Bool = false,
+        think: ReasoningConfig.OllamaThink = .enabled(false),
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> String {
@@ -121,16 +161,30 @@ class OllamaService: ObservableObject {
         let requestModel = (trimmedModel?.isEmpty == false ? trimmedModel : nil) ?? selectedModel
 
         do {
-            return try await OllamaClient.generate(
-                baseURL: url,
-                model: requestModel,
-                prompt: text,
-                systemPrompt: systemPrompt,
-                options: OllamaGenerationOptions(temperature: defaultTemperature),
-                think: think,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
-            )
+            switch think {
+            case .enabled(let enabled):
+                return try await OllamaClient.generate(
+                    baseURL: url,
+                    model: requestModel,
+                    prompt: text,
+                    systemPrompt: systemPrompt,
+                    options: OllamaGenerationOptions(temperature: defaultTemperature),
+                    think: enabled,
+                    timeout: timeout,
+                    retryOnTimeout: retryOnTimeout
+                )
+            case .level(let level):
+                return try await OllamaThinkLevelClient.generate(
+                    baseURL: url,
+                    model: requestModel,
+                    prompt: text,
+                    systemPrompt: systemPrompt,
+                    temperature: defaultTemperature,
+                    thinkLevel: level,
+                    timeout: timeout,
+                    retryOnTimeout: retryOnTimeout
+                )
+            }
         } catch let error as LLMKitError {
             throw mapLLMKitError(error)
         }
@@ -168,6 +222,34 @@ private struct OllamaCapabilitiesResponse: Decodable {
     }
 
     let models: [Model]
+}
+
+private struct OllamaShowResponse: Decodable {
+    struct Thinking: Decodable {
+        let values: [Value]
+    }
+
+    /// A `thinking.values` entry: `true`/`false`, or a level name such as `"high"`.
+    enum Value: Decodable {
+        case flag(Bool)
+        case level(String)
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let flag = try? container.decode(Bool.self) {
+                self = .flag(flag)
+            } else {
+                self = .level(try container.decode(String.self))
+            }
+        }
+
+        var level: String? {
+            if case .level(let name) = self { return name }
+            return nil
+        }
+    }
+
+    let thinking: Thinking?
 }
 
 // MARK: - Error Types
