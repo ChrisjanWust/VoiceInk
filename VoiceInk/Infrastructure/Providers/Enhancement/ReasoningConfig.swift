@@ -91,8 +91,9 @@ struct ReasoningConfig {
         "gpt-5.2",
     ]
 
-    // These OpenAI models reject "none" and reject `temperature: 0.3` even without
-    // `reasoning_effort`, so they always get `temperature: null`.
+    // These OpenAI models reject "none", so Default uses the lowest effort, "low". They
+    // reject `temperature: 0.3` even without `reasoning_effort`, so they always get
+    // `temperature: null`.
     static let openAIEffortRequiredModels: Set<String> = [
         "gpt-6.2-sol",
         "gpt-6.2-astra",
@@ -310,6 +311,7 @@ struct ReasoningConfig {
         switch provider {
         case .openAI:
             if openAINoneReasoningModels.contains(modelName) { return "none" }
+            if openAIEffortRequiredModels.contains(modelName) { return "low" }
         case .cerebras:
             if cerebrasGPTOSSMinimumReasoningModels.contains(modelName) {
                 return "low"

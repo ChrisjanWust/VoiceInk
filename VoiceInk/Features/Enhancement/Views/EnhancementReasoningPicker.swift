@@ -8,10 +8,18 @@ struct EnhancementReasoningPicker: View {
     var modelInfo = ReasoningModelInfo()
     @Binding var level: ReasoningLevel?
 
+    /// The model requests use, after retired-model migration.
+    private var requestModel: String {
+        EnhancementModelMigration.resolvedModel(
+            modelName.trimmingCharacters(in: .whitespacesAndNewlines),
+            for: provider
+        )
+    }
+
     private var levels: [ReasoningLevel] {
         ReasoningConfig.supportedLevels(
             for: provider,
-            modelName: modelName,
+            modelName: requestModel,
             modelInfo: modelInfo
         )
     }
@@ -28,7 +36,7 @@ struct EnhancementReasoningPicker: View {
         guard
             let defaultLevel = ReasoningConfig.defaultLevel(
                 for: provider,
-                modelName: modelName,
+                modelName: requestModel,
                 modelInfo: modelInfo
             )
         else {

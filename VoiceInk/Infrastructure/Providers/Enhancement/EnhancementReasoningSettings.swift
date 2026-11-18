@@ -55,8 +55,12 @@ enum ReasoningLevel: String, CaseIterable, Codable, Sendable, Identifiable {
 enum EnhancementReasoningSettings {
     static let levelsKey = "EnhancementReasoningLevels"
 
+    /// Keyed by the model a request actually uses, so a choice made for a retired
+    /// model ID (still saved in a mode or the Auto-Learn reviewer) applies to its
+    /// replacement.
     static func storageKey(provider: AIProvider, model: String) -> String {
-        "\(provider.rawValue)|\(model)"
+        let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(provider.rawValue)|\(EnhancementModelMigration.resolvedModel(model, for: provider))"
     }
 
     /// The level the user saved for this model, or `nil` for Default.

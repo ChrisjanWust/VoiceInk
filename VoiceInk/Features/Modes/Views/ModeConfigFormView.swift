@@ -502,7 +502,10 @@ struct ModeConfigFormView: View {
             level: Binding(
                 get: { draft.reasoningLevel(for: provider, model: model) },
                 set: { level in
-                    // Save the model the form shows, so the choice applies to it.
+                    // Save the provider and model the form shows, so the choice applies to them.
+                    if draft.selectedAIProvider == nil {
+                        draft.selectedAIProvider = provider.rawValue
+                    }
                     if draft.selectedAIModel?.isEmpty ?? true {
                         draft.selectedAIModel = model
                     }
