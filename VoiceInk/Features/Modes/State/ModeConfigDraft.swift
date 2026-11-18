@@ -31,6 +31,9 @@ struct ModeConfigDraft {
     // form wait here until Save, keyed by `EnhancementReasoningSettings.storageKey`.
     private var pendingReasoningLevels: [String: ReasoningLevel?] = [:]
 
+    // Fast mode is saved per provider and model too, and waits here until Save.
+    private var pendingFastMode: [String: Bool] = [:]
+
     init(mode: ConfigurationMode, modeManager: ModeManager) {
         switch mode {
         case .add:
@@ -248,6 +251,28 @@ struct ModeConfigDraft {
         let key = EnhancementReasoningSettings.storageKey(provider: provider, model: model)
         guard let pendingLevel = pendingReasoningLevels[key] else { return }
         EnhancementReasoningSettings.setLevel(pendingLevel, for: provider, model: model)
+    }
+
+    func isFastModeEnabled(for provider: AIProvider, model: String) -> Bool {
+        let key = EnhancementReasoningSettings.storageKey(provider: provider, model: model)
+        return pendingFastMode[key] ?? EnhancementFastModeSettings.isEnabled(for: provider, model: model)
+    }
+
+    mutating func setFastModeEnabled(_ enabled: Bool, for provider: AIProvider, model: String) {
+        let key = EnhancementReasoningSettings.storageKey(provider: provider, model: model)
+        pendingFastMode[key] = enabled
+    }
+
+    /// Saves the Fast mode choice for the provider and model this mode uses.
+    func commitFastMode() {
+        guard let provider = selectedAIProvider.flatMap(AIProvider.init(rawValue:)),
+            let model = selectedAIModel, !model.isEmpty
+        else {
+            return
+        }
+        let key = EnhancementReasoningSettings.storageKey(provider: provider, model: model)
+        guard let enabled = pendingFastMode[key] else { return }
+        EnhancementFastModeSettings.setEnabled(enabled, for: provider, model: model)
     }
 
     private func makeCustomCommand() -> ModeCustomCommand? {
