@@ -86,8 +86,8 @@ extension AIService {
                 model: resolvedModel,
                 messages: messages,
                 systemPrompt: systemPrompt,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
         case .custom:
             guard
