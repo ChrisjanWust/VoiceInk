@@ -76,10 +76,18 @@ enum BedrockReasoning {
     }
 
     static func levels(for model: BedrockModelInfo?) -> [ReasoningLevel] {
-        guard let control = control(for: model) else { return [] }
+        guard let model, let control = control(for: model) else { return [] }
         let offered = Set(control.values.compactMap(ReasoningLevel.init(effortValue:)))
+            .subtracting(tooSlowLevels[model.modelID] ?? [])
         return ReasoningLevel.allCases.filter(offered.contains)
     }
+
+    // Levels too slow for dictation in live measurements on 2026-11-18 (median above ~45 s or
+    // max above ~120 s, the rule in `ReasoningConfig.tooSlowLevels`), keyed by foundation
+    // model ID so every inference profile for the model is covered.
+    static let tooSlowLevels: [String: Set<ReasoningLevel>] = [
+        "anthropic.claude-opus-5-5": [.max]
+    ]
 
     /// What Bedrock's default does for this model, for the picker's "Default (…)" label.
     static func defaultLevel(for model: BedrockModelInfo?) -> ReasoningLevel? {
