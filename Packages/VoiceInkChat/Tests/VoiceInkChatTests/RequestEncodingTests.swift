@@ -329,10 +329,10 @@ import Testing
     @Test func bedrockDefaultMatchesInAppClient() throws {
         var chat = dictation
         chat.model = " global.anthropic.claude-sonnet-5-5 "
-        let request = try BedrockChatClient(apiKey: "Bearer ABSK-test", region: " US-EAST-2 ").makeURLRequest(chat)
+        let request = try BedrockChatClient(apiKey: "Bearer test-bedrock-key", region: " US-EAST-2 ").makeURLRequest(chat)
         #expect(request.url?.absoluteString
             == "https://bedrock-runtime.us-east-2.amazonaws.com/model/global.anthropic.claude-sonnet-5-5/converse")
-        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer ABSK-test")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-bedrock-key")
         #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
         try expectBody(request, """
             {"system": [{"text": "Clean up the transcript. Reply with the cleaned text only."}],
