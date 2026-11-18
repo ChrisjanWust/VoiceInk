@@ -76,7 +76,7 @@ struct AutoLearnAIReviewer {
             retryOnTimeout: EnhancementRequestSettings.retryOnTimeout)
         try Task.checkCancellation()
         guard selection == AutoLearnSettings.reviewerSelection else { throw CancellationError() }
-        let response = try Self.decodeResponse(completion.text)
+        let response = try Self.decodeResponse(AIEnhancementOutputFilter.filter(completion.text))
         guard response.count == pairs.count,
             Set(response.map(\.id)) == Set(pairs.map(\.id)) else { throw Failure.invalidResponse }
         let verdicts = Dictionary(uniqueKeysWithValues: response.map { ($0.id, $0.decision) })
