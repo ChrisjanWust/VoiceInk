@@ -72,6 +72,7 @@ extension AIService {
             request.model = policy.model
             request.temperature = policy.temperature
             request.reasoning = policy.reasoning
+            request.extraBody = policy.extraBody
             client = RoutedOpenRouterClient(
                 client: OpenRouterChatClient(
                     apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),

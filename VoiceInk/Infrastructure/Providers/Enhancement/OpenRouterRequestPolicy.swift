@@ -9,6 +9,8 @@ struct OpenRouterRequestPolicy {
     let model: String
     let temperature: Double?
     let reasoning: ChatRequest.Reasoning?
+    /// Only for a mandatory-reasoning model that lists no efforts: `reasoning: {exclude: true}`.
+    let extraBody: [String: JSONValue]
     let provider: OpenRouterChatClient.ProviderPreferences
 
     static func lowLatency(
@@ -27,14 +29,20 @@ struct OpenRouterRequestPolicy {
         // Reasoning models such as OpenAI GPT-5 reject `temperature` once reasoning is on.
         let sendsTemperature = supportedParameters.contains("temperature")
             && (selectedLevel == nil || selectedLevel == .off)
+        let requestReasoning = selectedReasoning ?? reasoningConfiguration(
+            capabilities: modelMetadata?.reasoning,
+            supportsReasoningParameter: supportedParameters.contains("reasoning")
+        )
+        // A mandatory-reasoning model that lists no efforts reasons at its own default, so
+        // only `exclude` is sent; `enabled: true` would ask for OpenRouter's default effort.
+        let excludesOnly = requestReasoning == nil && supportedParameters.contains("reasoning")
+            && modelMetadata?.reasoning?.mandatory == true
 
         return OpenRouterRequestPolicy(
             model: nitroVariant(of: modelName),
             temperature: sendsTemperature ? 0.3 : nil,
-            reasoning: selectedReasoning ?? reasoningConfiguration(
-                capabilities: modelMetadata?.reasoning,
-                supportsReasoningParameter: supportedParameters.contains("reasoning")
-            ),
+            reasoning: requestReasoning,
+            extraBody: excludesOnly ? ["reasoning": ["exclude": true]] : [:],
             provider: OpenRouterChatClient.ProviderPreferences(
                 sort: .throughput,
                 preferredMaxLatencyP90: 2.5,
@@ -62,8 +70,8 @@ struct OpenRouterRequestPolicy {
 
         if capabilities.mandatory {
             // Reasoning can't be turned off, so ask for the least. A model that lists no
-            // efforts reasons at its own default.
-            return capabilities.supportedEfforts.last.map(ChatRequest.Reasoning.effort) ?? .enabled
+            // efforts gets no `reasoning` here (see `excludesOnly`).
+            return capabilities.supportedEfforts.last.map(ChatRequest.Reasoning.effort)
         }
 
         if capabilities.supportedEfforts.contains("none") {
