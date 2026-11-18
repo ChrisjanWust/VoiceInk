@@ -260,8 +260,8 @@ struct ReasoningConfig {
             // chunked `content` that holds thinking.
             return []
         case .bedrock:
-            // Read from the model's live catalog schema; custom IDs stay on Default.
-            return BedrockReasoning.levels(for: modelInfo.bedrockModel)
+            // From the model's catalog schema or its family's native fields.
+            return BedrockReasoning.levels(for: modelInfo.bedrockModel, modelName: modelName)
         default:
             // Transcription-only providers, VoiceInk Refine, Local CLI, and any
             // provider without a mapping yet stay on Default.
@@ -314,7 +314,7 @@ struct ReasoningConfig {
         case .ollama:
             return .off
         case .bedrock:
-            return BedrockReasoning.defaultLevel(for: modelInfo.bedrockModel)
+            return BedrockReasoning.defaultLevel(for: modelInfo.bedrockModel, modelName: modelName)
         default:
             return getReasoningParameter(for: provider, modelName: modelName)
                 .flatMap(ReasoningLevel.init(effortValue:))
