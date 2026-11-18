@@ -204,7 +204,7 @@ class OllamaService: ObservableObject {
                     ),
                     timeout: timeout,
                     retryOnTimeout: retryOnTimeout
-                ).response
+                )
             }
         } catch let error as LLMKitError {
             throw mapLLMKitError(error)

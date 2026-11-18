@@ -437,8 +437,12 @@ enum ProviderModelCatalog {
     }
 
     private static func customEnhancementModelIDs(_ models: [OpenAICompatibleModel]) -> [String] {
+        // Routers behind a custom endpoint can list Gemini 1.x and 2.x, which VoiceInk doesn't offer.
         models
-            .filter { $0.active != false && isOpenAICompatibleChatModel($0.id) }
+            .filter {
+                $0.active != false && isOpenAICompatibleChatModel($0.id)
+                    && !GeminiModelMigration.isUnsupported($0.id)
+            }
             .map(\.id)
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
             .uniqued()

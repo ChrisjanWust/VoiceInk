@@ -175,7 +175,8 @@ struct ReasoningConfig {
         if groqNoneReasoningModels.contains(modelName) {
             return [.off, .low, .medium, .high]
         }
-        return [.off, .low, .medium, .high, .xhigh]
+        // The live list also has non-reasoning models, which reject `reasoning_effort`.
+        return []
     }
 
     // MARK: - OpenRouter
@@ -208,13 +209,7 @@ struct ReasoningConfig {
     // From Anthropic's effort and thinking docs (2026-11-18). IDs are matched without a
     // trailing date, so `claude-haiku-4-5-20251001` is `claude-haiku-4-5`.
 
-    // Adaptive thinking, with every effort from low to max.
-    static let anthropicXHighEffortModels: Set<String> = [
-        "claude-fable-5-2", "claude-mythos-5-2", "claude-fable-5-1", "claude-mythos-5-1",
-        "claude-fable-5", "claude-mythos-5", "claude-opus-5-5", "claude-opus-5",
-        "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5-5", "claude-sonnet-5",
-        "claude-haiku-5-5",
-    ]
+    // Any model not listed below has adaptive thinking, with every effort from low to max.
 
     // Adaptive thinking, with low to max but no xhigh.
     static let anthropicMaxEffortModels: Set<String> = [
@@ -340,44 +335,13 @@ struct ReasoningConfig {
         "mistral-medium-3-5",
     ]
 
-    // Mistral Large 4 takes low, medium and high, and uses high when it's omitted.
-    static let mistralLowToHighModels: Set<String> = [
-        "mistral-large-4",
-        "mistral-large-4-0",
-    ]
+    // Mistral Large 4 and GLM 5.3 also take `reasoning_effort`, but they always reason, so
+    // neither list offers them (`ProviderModelCatalog.mistralAlwaysReasoningTokens`).
 
-    // GLM 5.3 takes low, high and max, and can't turn reasoning off.
-    static let mistralLowHighMaxModels: Set<String> = [
-        "zai-glm-5-3",
-        "zai-glm-5-3-flash",
-    ]
-
-    /// The ID the Mistral docs name for this model: the ID itself, or the first dated ID a
-    /// live-list alias points to that has documented levels. Requests still send `modelName`.
-    private static func mistralDocumentedModel(for modelName: String, aliasTargets: [String]) -> String {
-        ([modelName] + aliasTargets).first { !mistralDocumentedLevels(for: $0).isEmpty } ?? modelName
-    }
-
+    /// The model itself or, for a `-latest` alias, a dated ID it points to. Requests still
+    /// send `modelName`.
     private static func mistralLevels(for modelName: String, aliasTargets: [String]) -> [ReasoningLevel] {
-        mistralDocumentedLevels(for: mistralDocumentedModel(for: modelName, aliasTargets: aliasTargets))
-    }
-
-    private static func mistralDocumentedLevels(for modelName: String) -> [ReasoningLevel] {
-        if mistralNoneOrHighModels.contains(modelName) {
-            return [.off, .high]
-        }
-        if mistralLowToHighModels.contains(modelName) {
-            return [.low, .medium, .high]
-        }
-        if mistralLowHighMaxModels.contains(modelName) {
-            return [.low, .high, .max]
-        }
-        return []
-    }
-
-    private static func mistralDefaultLevel(for modelName: String, aliasTargets: [String]) -> ReasoningLevel? {
-        mistralLowToHighModels.contains(mistralDocumentedModel(for: modelName, aliasTargets: aliasTargets))
-            ? .high : nil
+        ([modelName] + aliasTargets).contains(where: mistralNoneOrHighModels.contains) ? [.off, .high] : []
     }
 
     /// The `reasoning_effort` for a picked level, or `nil` for Default, which LLMkit sends
@@ -520,8 +484,6 @@ struct ReasoningConfig {
             return .off
         case .anthropic:
             return anthropicDefaultEffort(for: modelName)
-        case .mistral:
-            return mistralDefaultLevel(for: modelName, aliasTargets: modelInfo.mistralAliasTargets)
         default:
             return getReasoningParameter(for: provider, modelName: modelName)
                 .flatMap(ReasoningLevel.init(effortValue:))

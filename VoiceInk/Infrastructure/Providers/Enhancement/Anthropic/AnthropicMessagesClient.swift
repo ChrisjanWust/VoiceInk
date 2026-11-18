@@ -52,13 +52,6 @@ struct AnthropicMessagesRequest {
     var thinking: AnthropicThinking?
     /// `output_config.effort`, such as `"low"` or `"max"`.
     var effort: String?
-    /// Claude 5 models reject any non-default sampling parameter, so leave this `nil` for them.
-    var temperature: Double?
-    /// Extra top-level body fields, merged last so they win (for example Fast mode's
-    /// `FastModeRequestParameters.bodyFields`).
-    var extraBody: [String: Any] = [:]
-    /// Extra HTTP headers, such as a beta header.
-    var extraHeaders: [String: String] = [:]
 
     /// Builds a request the way LLMkit's `AnthropicLLMClient` does: an explicit system prompt
     /// wins, otherwise system messages are joined, and they're removed from `messages`.
@@ -78,8 +71,6 @@ struct AnthropicMessagesRequest {
         if let system { body["system"] = system }
         if let thinking { body["thinking"] = thinking.jsonValue }
         if let effort { body["output_config"] = ["effort": effort] }
-        if let temperature { body["temperature"] = temperature }
-        body.merge(extraBody) { _, extra in extra }
         return body
     }
 }
@@ -117,8 +108,11 @@ enum AnthropicMessagesClient {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw LLMKitError.missingAPIKey
         }
-        let headers = request.extraHeaders.merging(["x-api-key": apiKey, "anthropic-version": apiVersion]) { _, auth in auth }
-        return try ChatHTTP.jsonRequest(url: endpoint, body: request.jsonBody, headers: headers)
+        return try ChatHTTP.jsonRequest(
+            url: endpoint,
+            body: request.jsonBody,
+            headers: ["x-api-key": apiKey, "anthropic-version": apiVersion]
+        )
     }
 
     static func decodeResult(from data: Data) throws -> AnthropicMessageResult {
