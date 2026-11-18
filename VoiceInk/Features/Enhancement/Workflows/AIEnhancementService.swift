@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import LLMkit
 import SwiftData
+import VoiceInkChat
 import os
 
 struct AIEnhancementResult: Sendable {
@@ -254,6 +255,8 @@ class AIEnhancementService: ObservableObject {
                 systemMessage,
                 formattedText
             )
+        } catch let error as ChatError {
+            throw mapChatError(error)
         } catch let error as LLMKitError {
             throw mapLLMKitError(error)
         } catch let error as LocalAIError {
@@ -274,6 +277,27 @@ class AIEnhancementService: ObservableObject {
             throw error
         } catch {
             throw EnhancementError.customError(error.localizedDescription)
+        }
+    }
+
+    /// The same mapping as `mapLLMKitError`, for VoiceInkChat's errors.
+    private func mapChatError(_ error: ChatError) -> EnhancementError {
+        switch error {
+        case .missingAPIKey:
+            return .notConfigured
+        case .httpError(let statusCode, let message, _):
+            if statusCode == 429 { return .rateLimitExceeded }
+            if statusCode == 408 { return .timeout }
+            if (500...599).contains(statusCode) { return .serverError }
+            return .customError("HTTP \(statusCode): \(message)")
+        case .noResultReturned:
+            return .enhancementFailed
+        case .networkError:
+            return .networkError
+        case .timeout:
+            return .timeout
+        case .invalidURL, .unsupported, .decodingError, .encodingError:
+            return .customError(error.localizedDescription)
         }
     }
 

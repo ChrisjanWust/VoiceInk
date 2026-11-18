@@ -1,9 +1,10 @@
 import Foundation
+import VoiceInkChat
 
 /// What Fast mode adds to one enhancement request, independent of the client that sends it.
-/// A request path merges `bodyFields` into the top level of its JSON body.
+/// `bodyFields` go into the top level of the JSON body, through `ChatRequest.extraBody`.
 struct FastModeRequestParameters {
-    var bodyFields: [String: Any]
+    var bodyFields: [String: JSONValue]
 }
 
 /// Fast mode for enhancement requests: a provider's faster, higher-priced processing tier.
@@ -18,7 +19,7 @@ struct FastModeRequestParameters {
 ///
 /// Adding a provider:
 /// 1. Return its fields from `mapping(for:modelName:)`, for its measured model set.
-/// 2. Apply `parameters(...)` in that provider's request path in `AIService.performChatCompletion`.
+/// 2. `AIService.performChatCompletion` adds `parameters(...)` to every request's `extraBody`.
 /// 3. Add it to `appliedProviders`, which is what shows the toggle.
 enum FastModeConfig {
 
@@ -60,7 +61,7 @@ enum FastModeConfig {
 
     /// Providers whose request path applies the parameters, so the toggle shows for them.
     ///
-    /// Not here yet: Bedrock waits for its request path to apply `parameters(...)`.
+    /// Not here yet: Bedrock, until its request path moves to VoiceInkChat.
     static let appliedProviders: Set<AIProvider> = [.openAI]
 
     /// The provider's fast-tier fields for this model, or `nil` when the model has none.
@@ -96,13 +97,6 @@ enum FastModeConfig {
             return nil
         }
         return mapping(for: provider, modelName: modelName)
-    }
-
-    /// Merges the body fields into an LLMkit `extraBody`. Without parameters, `extraBody` is
-    /// returned unchanged.
-    static func merging(_ parameters: FastModeRequestParameters?, into extraBody: [String: Any]?) -> [String: Any]? {
-        guard let parameters else { return extraBody }
-        return (extraBody ?? [:]).merging(parameters.bodyFields) { _, fast in fast }
     }
 
     /// One line shown under the toggle while it's on, about the extra cost.

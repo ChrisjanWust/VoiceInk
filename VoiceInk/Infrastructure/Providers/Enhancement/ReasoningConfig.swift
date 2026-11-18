@@ -1,5 +1,6 @@
 import Foundation
 import LLMkit
+import VoiceInkChat
 
 /// What VoiceInk knows about a model's reasoning support beyond its ID.
 struct ReasoningModelInfo {
@@ -102,8 +103,7 @@ struct ReasoningConfig {
     ]
 
     // These OpenAI models reject "none", so Default uses the lowest effort, "low". They
-    // reject `temperature: 0.3` even without `reasoning_effort`, so they always get
-    // `temperature: null`.
+    // reject `temperature: 0.3` even without `reasoning_effort`, so they never get one.
     static let openAIEffortRequiredModels: Set<String> = [
         "gpt-6.2-sol",
         "gpt-6.2-astra",
@@ -370,12 +370,10 @@ struct ReasoningConfig {
     /// Adding reasoning for a provider (new providers start on Default only):
     /// 1. Return its levels here, from a `<provider>Levels(for:)` helper with the
     ///    provider's model sets above.
-    /// 2. Map a level to request parameters: `getReasoningParameter` and
-    ///    `getExtraBodyParameters` for OpenAI-compatible APIs, or a dedicated
-    ///    function like `geminiThinkingLevel(for:level:)` for native APIs. When
-    ///    LLMkit can't send the parameter or read the reply, send picked levels
-    ///    through a small in-app client (like `AnthropicMessagesClient`) and keep
-    ///    Default on LLMkit.
+    /// 2. Map a level to request parameters: `getReasoningParameter`, `temperature` and
+    ///    `extraBodyFields` for OpenAI-compatible APIs, or a dedicated function like
+    ///    `geminiThinkingLevel(for:level:)` for native APIs. Anything VoiceInkChat's
+    ///    `ChatRequest.reasoning` can't express goes in the request's `extraBody`.
     /// 3. Pass the level through in `AIService.performChatCompletion`.
     /// 4. If Default sends a parameter today, describe it in `defaultLevel`.
     static func supportedLevels(
@@ -531,37 +529,47 @@ struct ReasoningConfig {
         return nil
     }
 
-    // Providers verified live to accept `temperature: null`. OpenAI GPT-5 and GPT-6
-    // models reject any other temperature once reasoning is on, and LLMkit always
-    // sends 0.3, so a picked level replaces it with null. Groq and Mistral keep 0.3.
-    static let nullTemperatureProviders: Set<AIProvider> = [.openAI, .cerebras, .custom]
+    /// VoiceInk's sampling temperature for OpenAI-compatible requests.
+    static let defaultTemperature = 0.3
 
-    // Provider-specific body params: hiding reasoning, and nulling `temperature`.
-    static func getExtraBodyParameters(
+    // Providers where a picked level leaves `temperature` out. OpenAI GPT-5 and GPT-6 models
+    // reject any temperature but the default once reasoning is on. (Before VoiceInkChat these
+    // sent `temperature: null`, which the APIs treat the same as leaving it out.) Groq and
+    // Mistral keep 0.3.
+    static let noTemperatureProviders: Set<AIProvider> = [.openAI, .cerebras, .custom]
+
+    /// The `temperature` an OpenAI-compatible request sends, or `nil` to leave it out.
+    static func temperature(
         for provider: AIProvider,
         modelName: String,
         level: ReasoningLevel? = nil
-    ) -> [String: Any]? {
+    ) -> Double? {
         let selectedLevel = effectiveLevel(level, for: provider, modelName: modelName)
-        var parameters: [String: Any] = [:]
+        if (selectedLevel != nil && noTemperatureProviders.contains(provider))
+            || (provider == .openAI && openAIEffortRequiredModels.contains(modelName))
+        {
+            return nil
+        }
+        return defaultTemperature
+    }
 
+    // Provider-specific body fields that keep reasoning out of the reply.
+    static func extraBodyFields(
+        for provider: AIProvider,
+        modelName: String,
+        level: ReasoningLevel? = nil
+    ) -> [String: JSONValue] {
+        let selectedLevel = effectiveLevel(level, for: provider, modelName: modelName)
         if provider == .cerebras && cerebrasGPTOSSMinimumReasoningModels.contains(modelName) {
-            parameters["reasoning_format"] = "hidden"
+            return ["reasoning_format": "hidden"]
         } else if provider == .groq && groqGPTOSSMinimumReasoningModels.contains(modelName) {
-            parameters["include_reasoning"] = false
+            return ["include_reasoning": false]
         } else if provider == .groq, let selectedLevel, selectedLevel != .off {
             // Groq returns reasoning unless told not to. Only added when the user
             // turns reasoning on, so Default requests stay unchanged.
-            parameters["include_reasoning"] = false
+            return ["include_reasoning": false]
         }
-
-        if (selectedLevel != nil && nullTemperatureProviders.contains(provider))
-            || (provider == .openAI && openAIEffortRequiredModels.contains(modelName))
-        {
-            parameters["temperature"] = NSNull()
-        }
-
-        return parameters.isEmpty ? nil : parameters
+        return [:]
     }
 
     // MARK: - Request timeout
@@ -596,7 +604,7 @@ struct ReasoningConfig {
         guard let level, let floor = timeoutFloor(for: level), floor > timeout else {
             return RequestTimeout(seconds: timeout, retryOnTimeout: retryOnTimeout)
         }
-        // LLMkit applies the timeout to each of up to three attempts, so a retry would
+        // The timeout applies to each of up to three attempts, so a retry would
         // triple the wait. A reasoning request that outlasts the floor is unlikely to
         // finish on a second try.
         return RequestTimeout(seconds: floor, retryOnTimeout: false)

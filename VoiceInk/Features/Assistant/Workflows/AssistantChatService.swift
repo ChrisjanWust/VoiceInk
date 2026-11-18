@@ -1,6 +1,6 @@
 import Foundation
-import LLMkit
 import SwiftData
+import VoiceInkChat
 
 @MainActor
 final class AssistantChatService {
@@ -32,9 +32,9 @@ final class AssistantChatService {
         let chatMessages = messages.map { message in
             switch message.role {
             case .user:
-                return ChatMessage.user(message.content)
+                return ChatRequest.Message.user(message.content)
             case .assistant:
-                return ChatMessage.assistant(message.content)
+                return ChatRequest.Message.assistant(message.content)
             }
         }
 
