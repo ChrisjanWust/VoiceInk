@@ -396,6 +396,16 @@ class AIEnhancementService: ObservableObject {
                 }
             }
 
+            if updatedConfigurations[index].selectedAIProvider == AIProvider.cerebras.rawValue,
+                let modelName = updatedConfigurations[index].selectedAIModel
+            {
+                let currentModel = CerebrasModelMigration.resolvedModel(modelName, for: .cerebras)
+                if currentModel != modelName {
+                    updatedConfigurations[index].selectedAIModel = currentModel
+                    didUpdateModes = true
+                }
+            }
+
             let selectedPrompt = updatedConfigurations[index].selectedPrompt
             let hasInvalidPrompt = selectedPrompt.map { !availablePromptIds.contains($0) } ?? false
             let hasMissingPrompt = selectedPrompt == nil

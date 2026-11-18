@@ -388,6 +388,7 @@ class AIService: ObservableObject {
             }
         }
 
+        CerebrasModelMigration.migrateSavedSelection(in: userDefaults)
         loadSavedModelSelections()
         loadSavedOpenRouterModels()
 
@@ -623,6 +624,12 @@ class AIService: ObservableObject {
                 key,
                 region: BedrockRegion.current,
                 modelID: verificationModel
+            )
+        case .cerebras:
+            // GET /v1/models checks the key without depending on a model ID.
+            result = await OpenAITranscriptionClient.verifyAPIKey(
+                baseURL: URL(string: "https://api.cerebras.ai")!,
+                apiKey: key
             )
         default:
             guard let baseURL = URL(string: provider.baseURL) else {
