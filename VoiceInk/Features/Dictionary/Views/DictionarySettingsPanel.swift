@@ -387,9 +387,8 @@ struct DictionarySettingsPanel: View {
         switch provider {
         case .ollama: _ = await reviewerAIService.refreshOllamaAvailability()
         case .openRouter: await reviewerAIService.fetchOpenRouterModels()
-        case .gemini, .openAI: await reviewerAIService.fetchLiveModels(for: provider)
-        case .bedrock: await reviewerAIService.fetchLiveModels(for: provider)
-        default: break
+        default:
+            if provider.fetchesLiveModelList { await reviewerAIService.fetchLiveModels(for: provider) }
         }
     }
 

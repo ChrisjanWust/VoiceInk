@@ -49,7 +49,9 @@ final class OpenRouterCatalogStore: @unchecked Sendable {
 
 enum OpenRouterTranscriptionCatalog {
     static var models: [OpenRouterModel] {
-        OpenRouterCatalogStore.shared.models(for: .transcription) ?? []
+        // VoiceInk only offers Gemini 3 and later.
+        (OpenRouterCatalogStore.shared.models(for: .transcription) ?? [])
+            .filter { !GeminiModelMigration.isUnsupported($0.id) }
     }
 
     @MainActor

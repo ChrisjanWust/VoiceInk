@@ -1,7 +1,7 @@
 import Foundation
 
-/// Fetches the live model lists for hosted providers whose static presets go stale,
-/// and keeps only the text models that VoiceInk can use for enhancement.
+/// Fetches the live model lists for providers whose static presets go stale, and keeps
+/// only the text models that VoiceInk can use for enhancement.
 enum ProviderModelCatalog {
     enum CatalogError: LocalizedError {
         case missingAPIKey
@@ -28,6 +28,10 @@ enum ProviderModelCatalog {
     // v1beta lists preview models too; the stable v1 list omits them.
     static let geminiModelsEndpoint = URL(string: "https://generativelanguage.googleapis.com/v1beta/models")!
     static let geminiStableModelsEndpoint = URL(string: "https://generativelanguage.googleapis.com/v1/models")!
+    static let anthropicModelsEndpoint = URL(string: "https://api.anthropic.com/v1/models")!
+    static let groqModelsEndpoint = URL(string: "https://api.groq.com/openai/v1/models")!
+    static let cerebrasModelsEndpoint = URL(string: "https://api.cerebras.ai/v1/models")!
+    static let mistralModelsEndpoint = URL(string: "https://api.mistral.ai/v1/models")!
 
     // MARK: - OpenAI
 
@@ -180,6 +184,267 @@ enum ProviderModelCatalog {
         return true
     }
 
+    // MARK: - Anthropic
+
+    /// Fetches every page of `GET /v1/models` and returns the active Claude models, newest first.
+    static func fetchAnthropicModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
+        let trimmedKey = try validatedKey(apiKey)
+        var models: [AnthropicModel] = []
+        var afterID: String?
+
+        // Pages hold up to 1000 models; ten pages is far beyond the current catalog.
+        for _ in 0..<10 {
+            var components = URLComponents(url: anthropicModelsEndpoint, resolvingAgainstBaseURL: false)!
+            var queryItems = [URLQueryItem(name: "limit", value: "1000")]
+            if let afterID {
+                queryItems.append(URLQueryItem(name: "after_id", value: afterID))
+            }
+            components.queryItems = queryItems
+
+            var request = URLRequest(url: components.url!)
+            request.setValue(trimmedKey, forHTTPHeaderField: "x-api-key")
+            // The same version LLMkit sends with enhancement requests.
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+
+            let page = try decode(AnthropicModelList.self, from: try await perform(request, timeout: timeout))
+            models.append(contentsOf: page.data)
+            guard page.hasMore == true, let next = page.lastID, !next.isEmpty, next != afterID else { break }
+            afterID = next
+        }
+
+        let ids = anthropicEnhancementModelIDs(models)
+        guard !ids.isEmpty else { throw CatalogError.noUsableModels }
+        return ids
+    }
+
+    static func anthropicEnhancementModelIDs(from data: Data) throws -> [String] {
+        anthropicEnhancementModelIDs(try decode(AnthropicModelList.self, from: data).data)
+    }
+
+    /// Every Claude model is a text chat model on the Messages API, so only the lifecycle
+    /// filters: `deprecated` models are closed to new users and `retired` ones fail. The list
+    /// is already newest first.
+    private static func anthropicEnhancementModelIDs(_ models: [AnthropicModel]) -> [String] {
+        models
+            .filter { model in
+                guard model.type == nil || model.type == "model" else { return false }
+                if let lifecycle = model.lifecycle { return lifecycle == "active" }
+                return model.deprecatedAt == nil
+            }
+            .map(\.id)
+            .uniqued()
+    }
+
+    // MARK: - Groq
+
+    static func fetchGroqModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
+        try await fetchOpenAICompatibleModelIDs(
+            endpoint: groqModelsEndpoint,
+            apiKey: apiKey,
+            timeout: timeout,
+            filter: groqEnhancementModelIDs
+        )
+    }
+
+    static func groqEnhancementModelIDs(from data: Data) throws -> [String] {
+        groqEnhancementModelIDs(try decode(OpenAICompatibleModelList.self, from: data).data)
+    }
+
+    // Groq's list has no capability fields, but it marks retired models `active: false`.
+    // Besides the shared exclusions, drop the `compound` systems, which run web search
+    // and code tools on the request instead of only answering it.
+    private static let groqExcludedTokens = ["playai", "orpheus", "compound"]
+
+    private static func groqEnhancementModelIDs(_ models: [OpenAICompatibleModel]) -> [String] {
+        models
+            .filter { model in
+                let lowercased = model.id.lowercased()
+                return model.active != false
+                    && isOpenAICompatibleChatModel(model.id)
+                    && !groqExcludedTokens.contains(where: { lowercased.contains($0) })
+            }
+            .sortedNewestFirst()
+    }
+
+    // MARK: - Cerebras
+
+    static func fetchCerebrasModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
+        try await fetchOpenAICompatibleModelIDs(
+            endpoint: cerebrasModelsEndpoint,
+            apiKey: apiKey,
+            timeout: timeout,
+            filter: cerebrasEnhancementModelIDs
+        )
+    }
+
+    static func cerebrasEnhancementModelIDs(from data: Data) throws -> [String] {
+        cerebrasEnhancementModelIDs(try decode(OpenAICompatibleModelList.self, from: data).data)
+    }
+
+    /// Cerebras only serves text chat models and its list has no capability fields, so
+    /// only the shared exclusions apply, in case it adds other kinds of model.
+    private static func cerebrasEnhancementModelIDs(_ models: [OpenAICompatibleModel]) -> [String] {
+        models
+            .filter { $0.active != false && isOpenAICompatibleChatModel($0.id) }
+            .sortedNewestFirst()
+    }
+
+    // MARK: - Mistral
+
+    static func fetchMistralModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
+        let trimmedKey = try validatedKey(apiKey)
+        var request = URLRequest(url: mistralModelsEndpoint)
+        request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
+
+        let ids = try mistralEnhancementModelIDs(from: try await perform(request, timeout: timeout))
+        guard !ids.isEmpty else { throw CatalogError.noUsableModels }
+        return ids
+    }
+
+    /// Keeps the chat models from Mistral's capability flags, and lists each model once.
+    static func mistralEnhancementModelIDs(from data: Data) throws -> [String] {
+        let models = try decode(MistralModelList.self, from: data).data.filter(isMistralEnhancementModel)
+
+        // The list has a card for every alias of a model (`mistral-small-latest` and
+        // `mistral-small-2506`), all with the same `name`. Keep one ID per model: the moving
+        // `-latest` alias when there is one, as the built-in list does, or else the model name.
+        var groups: [String: [MistralModel]] = [:]
+        var order: [String] = []
+        for model in models {
+            let key = model.name ?? model.id
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(model)
+        }
+
+        return order.compactMap { key -> (id: String, created: Int)? in
+            guard let cards = groups[key] else { return nil }
+            let ids = cards.map(\.id)
+            let id = ids.first(where: { $0.hasSuffix("-latest") })
+                ?? ids.first(where: { $0 == key })
+                ?? ids.sorted().first
+            guard let id else { return nil }
+            return (id, cards.compactMap(\.created).max() ?? 0)
+        }
+        .sorted { lhs, rhs in
+            if lhs.created != rhs.created { return lhs.created > rhs.created }
+            return lhs.id.localizedStandardCompare(rhs.id) == .orderedAscending
+        }
+        .map(\.id)
+        .uniqued()
+    }
+
+    // Models that always reason return `message.content` as a list of thinking and text
+    // chunks, whatever `reasoning_effort` says, and LLMkit only reads a plain string. The
+    // `reasoning` capability is also set on hybrid models that answer in plain text by
+    // default, so these are matched by ID. Mistral Large 4 "always reasons" and defaults
+    // to `high`; `mistral-large-latest` points to it. See
+    // https://docs.mistral.ai/inference/conversations/reasoning
+    private static let mistralAlwaysReasoningTokens = [
+        "zai-glm", "magistral", "mistral-large-4", "mistral-large-latest",
+    ]
+
+    private static func isMistralEnhancementModel(_ model: MistralModel) -> Bool {
+        guard let capabilities = model.capabilities, capabilities.completionChat == true else { return false }
+        let ids = [model.id, model.name ?? ""].map { $0.lowercased() }
+        if ids.contains(where: { id in mistralAlwaysReasoningTokens.contains(where: { id.contains($0) }) }) {
+            return false
+        }
+        // OCR, moderation, classifier, transcription and speech models can also be
+        // flagged for chat; none is a plain text model.
+        let specialPurpose = [
+            capabilities.ocr, capabilities.moderation, capabilities.classification,
+            capabilities.audio, capabilities.audioTranscription, capabilities.audioTranscriptionRealtime,
+            capabilities.audioSpeech,
+        ]
+        if specialPurpose.contains(true) { return false }
+        // `deprecation` is the scheduled retirement date, set once a model is deprecated.
+        if model.deprecation != nil { return false }
+        if model.archived == true { return false }
+        return true
+    }
+
+    // MARK: - Custom OpenAI-compatible providers
+
+    /// The `/models` URL next to a configured chat completions URL, or nil when the URL
+    /// doesn't end in `/chat/completions` and so has no known models endpoint.
+    static func customModelsEndpoint(forChatCompletionsURL urlString: String) -> URL? {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: trimmed),
+            let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+            components.host?.isEmpty == false
+        else {
+            return nil
+        }
+
+        var path = components.path
+        while path.hasSuffix("/") { path.removeLast() }
+        let suffix = "/chat/completions"
+        guard path.lowercased().hasSuffix(suffix) else { return nil }
+        path.removeLast(suffix.count)
+        components.path = path + "/models"
+        return components.url
+    }
+
+    /// Fetches the models a custom OpenAI-compatible endpoint lists. Many local servers
+    /// support this, but not all; callers treat a failure as "no list" and keep the
+    /// user's typed model.
+    static func fetchCustomModelIDs(
+        chatCompletionsURL: String,
+        apiKey: String,
+        timeout: TimeInterval = 10
+    ) async throws -> [String] {
+        guard let endpoint = customModelsEndpoint(forChatCompletionsURL: chatCompletionsURL) else {
+            throw CatalogError.invalidResponse
+        }
+        return try await fetchOpenAICompatibleModelIDs(
+            endpoint: endpoint,
+            apiKey: apiKey,
+            timeout: timeout,
+            filter: customEnhancementModelIDs
+        )
+    }
+
+    static func customEnhancementModelIDs(from data: Data) throws -> [String] {
+        customEnhancementModelIDs(try decode(OpenAICompatibleModelList.self, from: data).data)
+    }
+
+    private static func customEnhancementModelIDs(_ models: [OpenAICompatibleModel]) -> [String] {
+        models
+            .filter { $0.active != false && isOpenAICompatibleChatModel($0.id) }
+            .map(\.id)
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            .uniqued()
+    }
+
+    // MARK: - OpenAI-compatible lists
+
+    // OpenAI-style lists carry no capability fields, so special-purpose models are
+    // recognised by name: embeddings, speech-to-text, text-to-speech, moderation and
+    // safety classifiers, rerankers and image generators.
+    private static let openAICompatibleExcludedTokens = [
+        "embed", "whisper", "transcribe", "tts", "speech", "audio", "moderation", "guard",
+        "rerank", "dall-e", "image-gen", "gpt-image", "stable-diffusion", "flux",
+    ]
+
+    static func isOpenAICompatibleChatModel(_ id: String) -> Bool {
+        let lowercased = id.lowercased()
+        return !lowercased.isEmpty && !openAICompatibleExcludedTokens.contains(where: { lowercased.contains($0) })
+    }
+
+    private static func fetchOpenAICompatibleModelIDs(
+        endpoint: URL,
+        apiKey: String,
+        timeout: TimeInterval,
+        filter: ([OpenAICompatibleModel]) -> [String]
+    ) async throws -> [String] {
+        var request = URLRequest(url: endpoint)
+        request.setValue("Bearer \(try validatedKey(apiKey))", forHTTPHeaderField: "Authorization")
+
+        let ids = filter(try decode(OpenAICompatibleModelList.self, from: try await perform(request, timeout: timeout)).data)
+        guard !ids.isEmpty else { throw CatalogError.noUsableModels }
+        return ids
+    }
+
     // MARK: - Helpers
 
     /// The major version in a `gemini-<major>[.<minor>]-…` ID, or nil for unversioned IDs.
@@ -192,6 +457,14 @@ enum ProviderModelCatalog {
     private static func hasDatedSuffix(_ id: String) -> Bool {
         let patterns = [#"-\d{4}-\d{2}-\d{2}$"#, #"-\d{3,4}$"#]
         return patterns.contains { id.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    private static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            throw CatalogError.invalidResponse
+        }
     }
 
     private static func validatedKey(_ apiKey: String) throws -> String {
@@ -220,13 +493,17 @@ enum ProviderModelCatalog {
         return data
     }
 
-    /// Both providers wrap failures as `{"error": {"message": "..."}}`.
+    /// Most providers wrap failures as `{"error": {"message": "..."}}`; Mistral and some
+    /// OpenAI-compatible servers use a top-level `message` or `detail` string.
     private static func apiErrorMessage(from data: Data) -> String? {
         struct ErrorBody: Decodable {
             struct Detail: Decodable { let message: String? }
             let error: Detail?
+            let message: String?
+            let detail: String?
         }
-        return (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error?.message
+        guard let body = try? JSONDecoder().decode(ErrorBody.self, from: data) else { return nil }
+        return body.error?.message ?? body.message ?? body.detail
     }
 }
 
@@ -348,9 +625,93 @@ private struct GeminiModel: Decodable {
     let supportedGenerationMethods: [String]?
 }
 
+private struct AnthropicModelList: Decodable {
+    let data: [AnthropicModel]
+    let hasMore: Bool?
+    let lastID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case data
+        case hasMore = "has_more"
+        case lastID = "last_id"
+    }
+}
+
+private struct AnthropicModel: Decodable {
+    let id: String
+    let type: String?
+    let lifecycle: String?
+    let deprecatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case lifecycle
+        case deprecatedAt = "deprecated_at"
+    }
+}
+
+/// The OpenAI-style list that Groq, Cerebras and custom servers return. Groq adds `active`.
+private struct OpenAICompatibleModelList: Decodable {
+    let data: [OpenAICompatibleModel]
+}
+
+private struct OpenAICompatibleModel: Decodable {
+    let id: String
+    let created: Int?
+    let active: Bool?
+}
+
+private struct MistralModelList: Decodable {
+    let data: [MistralModel]
+}
+
+private struct MistralModel: Decodable {
+    let id: String
+    let name: String?
+    let created: Int?
+    let capabilities: MistralModelCapabilities?
+    let deprecation: String?
+    let archived: Bool?
+}
+
+private struct MistralModelCapabilities: Decodable {
+    let completionChat: Bool?
+    let ocr: Bool?
+    let moderation: Bool?
+    let classification: Bool?
+    let audio: Bool?
+    let audioTranscription: Bool?
+    let audioTranscriptionRealtime: Bool?
+    let audioSpeech: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case completionChat = "completion_chat"
+        case ocr
+        case moderation
+        case classification
+        case audio
+        case audioTranscription = "audio_transcription"
+        case audioTranscriptionRealtime = "audio_transcription_realtime"
+        case audioSpeech = "audio_speech"
+    }
+}
+
 extension Array where Element == String {
     fileprivate func uniqued() -> [String] {
         var seen = Set<String>()
         return filter { seen.insert($0).inserted }
+    }
+}
+
+extension Array where Element == OpenAICompatibleModel {
+    /// IDs sorted newest first by `created`, then by name.
+    fileprivate func sortedNewestFirst() -> [String] {
+        sorted { lhs, rhs in
+            if lhs.created != rhs.created { return (lhs.created ?? 0) > (rhs.created ?? 0) }
+            return lhs.id.localizedStandardCompare(rhs.id) == .orderedAscending
+        }
+        .map(\.id)
+        .uniqued()
     }
 }
