@@ -61,12 +61,34 @@ enum FastModeConfig {
         "gemini-3.1-flash-lite",
     ]
 
+    // MARK: - Anthropic
+
+    /// Models that take `speed: "fast"` on the Messages API without a beta header, measured
+    /// live on 2026-11-18: Claude Opus 5.5 median 1.76 s to 0.83 s over 8 interleaved runs.
+    /// Sonnet 5.5 and Haiku 5.5 reject `speed`. Opus 5 needs the fast-mode beta header and a
+    /// waitlisted rate limit, and Opus 4.8 loses fast mode on 2026-11-30, so neither is listed.
+    static let anthropicFastModels: Set<String> = [
+        "claude-opus-5-5"
+    ]
+
+    // MARK: - Amazon Bedrock
+
+    /// Model IDs that take `performanceConfig: { latency: "optimized" }` on Converse, measured
+    /// live on 2026-11-18: Nova Pro median 1.21 s to 0.99 s over 8 interleaved runs. Only the
+    /// `us.` inference profile accepts it (the in-Region ID returns 400 in us-east-1, us-east-2
+    /// and us-west-2), and that profile only runs from US Regions. No current model lists
+    /// `latencyOptimizationSupported: true` in ListFoundationModels, so the ID is listed here.
+    static let bedrockLatencyOptimizedModels: Set<String> = [
+        "us.amazon.nova-pro-v1:0"
+    ]
+
     // MARK: - Shared
 
     /// Providers whose request path applies the parameters, so the toggle shows for them.
     ///
-    /// Gemini isn't here yet: its requests go through LLMkit's `GeminiLLMClient`, which can't add
-    /// body fields. Add it once Gemini requests move to the in-app chat transport.
+    /// Not here yet: Gemini requests go through LLMkit's `GeminiLLMClient`, which can't add body
+    /// fields; Anthropic and Bedrock wait for their in-app clients to carry the fields. Add each
+    /// once its request path applies `parameters(...)`.
     static let appliedProviders: Set<AIProvider> = [.openAI]
 
     /// The provider's fast-tier fields for this model, or `nil` when the model has none.
@@ -81,6 +103,10 @@ enum FastModeConfig {
             return FastModeRequestParameters(bodyFields: ["service_tier": "priority"])
         case .gemini where geminiPriorityModels.contains(modelName):
             return FastModeRequestParameters(bodyFields: ["service_tier": "priority"])
+        case .anthropic where anthropicFastModels.contains(modelName):
+            return FastModeRequestParameters(bodyFields: ["speed": "fast"])
+        case .bedrock where bedrockLatencyOptimizedModels.contains(modelName):
+            return FastModeRequestParameters(bodyFields: ["performanceConfig": ["latency": "optimized"]])
         default:
             return nil
         }
@@ -119,6 +145,10 @@ enum FastModeConfig {
             return String(localized: "Uses OpenAI priority processing, billed at a higher rate than standard.")
         case .gemini:
             return String(localized: "Uses Gemini priority inference, billed at 75–100% above the standard rate.")
+        case .anthropic:
+            return String(localized: "Uses Anthropic fast mode, billed at a higher rate than standard.")
+        case .bedrock:
+            return String(localized: "Uses Bedrock latency-optimized inference, billed at a higher rate.")
         default:
             return String(localized: "Uses priority processing, billed at a higher rate.")
         }
