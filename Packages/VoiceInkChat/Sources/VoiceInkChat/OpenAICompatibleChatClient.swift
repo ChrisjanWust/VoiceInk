@@ -132,7 +132,8 @@ public struct OpenAICompatibleChatClient: ChatClient {
     /// `max_output_tokens` are the others VoiceInk's OpenRouter policy treats as truncation.
     static func mapFinishReason(_ reason: String?) -> FinishReason {
         switch reason?.lowercased() {
-        case "stop": return .stop
+        // Together AI's SDK lists `eos` as a normal finish.
+        case "stop", "eos": return .stop
         case "length", "model_length", "max_tokens", "max_output_tokens": return .length
         case "content_filter": return .contentFilter
         case "tool_calls", "function_call": return .toolCalls
