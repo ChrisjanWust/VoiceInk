@@ -16,25 +16,35 @@ extension AIService {
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> AIChatCompletionResult {
-        let resolvedModel = CerebrasModelMigration.resolvedModel(
+        let resolvedModel = EnhancementModelMigration.resolvedModel(
             modelName?.isEmpty == false ? modelName! : selectedModel(for: provider),
             for: provider
+        )
+        let reasoningLevel = EnhancementReasoningSettings.savedLevel(for: provider, model: resolvedModel)
+        let requestTimeout = ReasoningConfig.requestTimeout(
+            timeout,
+            retryOnTimeout: retryOnTimeout,
+            level: ReasoningConfig.effectiveLevel(
+                reasoningLevel,
+                for: provider,
+                modelName: resolvedModel,
+                modelInfo: reasoningModelInfo(for: provider, model: resolvedModel)
+            )
         )
 
         let result: String
         var openRouterCompletion: OpenRouterCompletion? = nil
         switch provider {
         case .gemini:
-            let geminiModel = GeminiModelMigration.resolvedModel(resolvedModel, for: .gemini)
             result = try await GeminiLLMClient.chatCompletion(
-                apiKey: try chatAPIKey(for: provider, modelName: geminiModel),
-                model: geminiModel,
+                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                model: resolvedModel,
                 messages: messages,
                 systemPrompt: systemPrompt,
-                thinkingLevel: ReasoningConfig.geminiThinkingLevel(for: geminiModel),
+                thinkingLevel: ReasoningConfig.geminiThinkingLevel(for: resolvedModel, level: reasoningLevel),
                 store: false,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
         case .anthropic:
             result = try await AnthropicLLMClient.chatCompletion(
@@ -42,13 +52,14 @@ extension AIService {
                 model: resolvedModel,
                 messages: messages,
                 systemPrompt: systemPrompt,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
         case .openRouter:
             let policy = OpenRouterRequestPolicy.lowLatency(
                 modelName: resolvedModel,
-                modelMetadata: openRouterModelMetadata(for: resolvedModel)
+                modelMetadata: openRouterModelMetadata(for: resolvedModel),
+                reasoningLevel: reasoningLevel
             )
             let completion = try await OpenRouterClient.chatCompletion(
                 apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
@@ -61,8 +72,8 @@ extension AIService {
                 includeRouterMetadata: true,
                 appReferer: URL(string: "https://tryvoiceink.com"),
                 appTitle: "VoiceInk",
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
             guard !OpenRouterRequestPolicy.outputWasTruncated(finishReason: completion.finishReason) else {
                 throw EnhancementError.outputTruncated
@@ -83,8 +94,18 @@ extension AIService {
                 messages: messages,
                 systemPrompt: systemPrompt,
                 temperature: 0.3,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                reasoningEffort: ReasoningConfig.getReasoningParameter(
+                    for: .custom,
+                    modelName: resolvedModel,
+                    level: reasoningLevel
+                ),
+                extraBody: ReasoningConfig.getExtraBodyParameters(
+                    for: .custom,
+                    modelName: resolvedModel,
+                    level: reasoningLevel
+                ),
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
         case .voiceInkRefine:
             throw EnhancementError.customError(
@@ -95,8 +116,13 @@ extension AIService {
                 text: localUserPrompt ?? chatPrompt(from: messages),
                 systemPrompt: systemPrompt ?? "",
                 model: resolvedModel,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                think: ReasoningConfig.ollamaThink(
+                    level: reasoningLevel,
+                    modelName: resolvedModel,
+                    modelInfo: reasoningModelInfo(for: .ollama, model: resolvedModel)
+                ),
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
         case .localCLI:
             result = try await enhanceWithLocalCLI(
@@ -109,11 +135,13 @@ extension AIService {
             }
             let reasoningEffort = ReasoningConfig.getReasoningParameter(
                 for: provider,
-                modelName: resolvedModel
+                modelName: resolvedModel,
+                level: reasoningLevel
             )
             let extraBody = ReasoningConfig.getExtraBodyParameters(
                 for: provider,
-                modelName: resolvedModel
+                modelName: resolvedModel,
+                level: reasoningLevel
             )
             result = try await OpenAILLMClient.chatCompletion(
                 baseURL: baseURL,
@@ -124,8 +152,8 @@ extension AIService {
                 temperature: 0.3,
                 reasoningEffort: reasoningEffort,
                 extraBody: extraBody,
-                timeout: timeout,
-                retryOnTimeout: retryOnTimeout
+                timeout: requestTimeout.seconds,
+                retryOnTimeout: requestTimeout.retryOnTimeout
             )
         }
 

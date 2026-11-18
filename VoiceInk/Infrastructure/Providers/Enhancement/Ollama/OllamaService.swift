@@ -19,6 +19,9 @@ class OllamaService: ObservableObject {
     }
 
     @Published var availableModels: [OllamaModel] = []
+    /// Whether each installed model lists the "thinking" capability. Models are
+    /// missing when the server doesn't report capabilities (older Ollama versions).
+    @Published var thinkingSupport: [String: Bool] = [:]
     @Published var isConnected: Bool = false
     @Published var isLoadingModels: Bool = false
 
@@ -62,6 +65,7 @@ class OllamaService: ObservableObject {
             let models = try await OllamaClient.fetchModels(baseURL: url)
             isConnected = true
             availableModels = models
+            thinkingSupport = await fetchThinkingSupport(baseURL: url)
 
             if !models.contains(where: { $0.name == selectedModel }) && !models.isEmpty {
                 selectedModel = models[0].name
@@ -71,14 +75,37 @@ class OllamaService: ObservableObject {
         } catch {
             isConnected = false
             availableModels = []
+            thinkingSupport = [:]
             return .failure(error)
         }
+    }
+
+    // LLMkit's OllamaModel doesn't decode `capabilities`, so read them from /api/tags here.
+    private func fetchThinkingSupport(baseURL: URL) async -> [String: Bool] {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/tags"))
+        request.timeoutInterval = 10
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+            let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+            let decoded = try? JSONDecoder().decode(OllamaCapabilitiesResponse.self, from: data)
+        else {
+            return [:]
+        }
+
+        var support: [String: Bool] = [:]
+        for model in decoded.models {
+            if let capabilities = model.capabilities {
+                support[model.name] = capabilities.contains("thinking")
+            }
+        }
+        return support
     }
 
     func enhance(
         _ text: String,
         withSystemPrompt systemPrompt: String? = nil,
         model: String? = nil,
+        think: Bool = false,
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> String {
@@ -100,7 +127,7 @@ class OllamaService: ObservableObject {
                 prompt: text,
                 systemPrompt: systemPrompt,
                 options: OllamaGenerationOptions(temperature: defaultTemperature),
-                think: false,
+                think: think,
                 timeout: timeout,
                 retryOnTimeout: retryOnTimeout
             )
@@ -132,6 +159,15 @@ class OllamaService: ObservableObject {
             return .modelNotFound
         }
     }
+}
+
+private struct OllamaCapabilitiesResponse: Decodable {
+    struct Model: Decodable {
+        let name: String
+        let capabilities: [String]?
+    }
+
+    let models: [Model]
 }
 
 // MARK: - Error Types

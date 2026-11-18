@@ -754,6 +754,7 @@ class AIService: ObservableObject {
         text: String,
         systemPrompt: String,
         model: String? = nil,
+        think: Bool = false,
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> String {
@@ -761,6 +762,7 @@ class AIService: ObservableObject {
             text,
             withSystemPrompt: systemPrompt,
             model: model,
+            think: think,
             timeout: timeout,
             retryOnTimeout: retryOnTimeout
         )
@@ -809,6 +811,17 @@ class AIService: ObservableObject {
 
     func openRouterModelMetadata(for modelName: String) -> OpenRouterModel? {
         openRouterModelCatalog.first(where: { $0.id == modelName })
+    }
+
+    func reasoningModelInfo(for provider: AIProvider, model: String) -> ReasoningModelInfo {
+        switch provider {
+        case .openRouter:
+            return ReasoningModelInfo(openRouterModel: openRouterModelMetadata(for: model))
+        case .ollama:
+            return ReasoningModelInfo(ollamaSupportsThinking: ollamaService.thinkingSupport[model])
+        default:
+            return ReasoningModelInfo()
+        }
     }
 
     @MainActor
@@ -925,11 +938,13 @@ class AIService: ObservableObject {
         }
     }
 
-    /// LLMkit always sends `temperature`, and OpenAI's reasoning models reject it unless
-    /// reasoning effort is `none`. So only offer the OpenAI models VoiceInk sends `none` to.
+    /// LLMkit always sends `temperature: 0.3`, which OpenAI's reasoning models reject
+    /// unless reasoning effort is `none`. So only offer the OpenAI models whose Default
+    /// request VoiceInk has made work: `none`, or `temperature: null` for models that
+    /// reject `none`.
     private func usableLiveModels(_ models: [String], for provider: AIProvider) -> [String] {
         guard provider == .openAI else { return models }
-        return models.filter { ReasoningConfig.getReasoningParameter(for: .openAI, modelName: $0) == "none" }
+        return models.filter(ReasoningConfig.isOpenAIDefaultRequestSupported)
     }
 
     /// Puts the default model first so the picker opens on the recommended choice.
