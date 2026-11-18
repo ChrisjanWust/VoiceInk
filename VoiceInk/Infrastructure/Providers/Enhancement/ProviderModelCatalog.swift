@@ -173,13 +173,12 @@ enum ProviderModelCatalog {
         let lowercased = id.lowercased()
         guard lowercased.hasPrefix("gemini-") || lowercased.hasPrefix("gemma-") else { return false }
         // Only Gemini 3 and later accept a system instruction on /v1/interactions, and
-        // enhancement always sends one.
+        // enhancement always sends one. This also drops versionless aliases such as
+        // `gemini-flash-latest`, which could point to an older model. A versioned `-latest`
+        // ID would pass, and VoiceInkChat sends it to v1beta, where those aliases live.
         if lowercased.hasPrefix("gemini-") {
             guard let major = geminiMajorVersion(lowercased), major >= 3 else { return false }
         }
-        // Moving aliases such as `gemini-flash-latest` are v1beta-only without a `-preview`
-        // suffix, so LLMkit would send them to v1, which returns 404.
-        if lowercased.hasSuffix("-latest") { return false }
         if geminiExcludedTokens.contains(where: { lowercased.contains($0) }) { return false }
         if hasDatedSuffix(lowercased) { return false }
         return true

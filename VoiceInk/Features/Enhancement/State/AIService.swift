@@ -1024,10 +1024,9 @@ class AIService: ObservableObject {
         }
     }
 
-    /// LLMkit always sends `temperature: 0.3`, which OpenAI's reasoning models reject
-    /// unless reasoning effort is `none`. So only offer the OpenAI models whose Default
-    /// request VoiceInk has made work: `none`, or `temperature: null` for models that
-    /// reject `none`.
+    /// OpenAI's reasoning models reject `temperature` unless reasoning effort is `none`, and
+    /// some reject `none`. So only offer the OpenAI models whose Default request VoiceInk has
+    /// verified: `none`, or no temperature for models that reject `none`.
     ///
     /// A model that a retired-model migration remaps (Cerebras still serving an ID VoiceInk
     /// treats as retired, say) would silently run as another model, so it isn't offered.
