@@ -45,27 +45,6 @@ extension AIService {
         .raised(toAtLeast: provider == .bedrock ? BedrockModelCatalog.minimumTimeout(forModel: resolvedModel) : nil)
         let llmkitMessages = messages.map { ChatMessage(role: $0.role.rawValue, content: $0.content) }
 
-        if provider == .mistral,
-            let reasoningEffort = ReasoningConfig.mistralReasoningEffort(
-                for: resolvedModel,
-                level: reasoningLevel,
-                modelInfo: reasoningModelInfo(for: provider, model: resolvedModel)
-            )
-        {
-            // Mistral returns reasoning as chunked `content`, which LLMkit can't decode, so a
-            // picked level uses the in-app client. Default stays on the LLMkit path below.
-            var request = MistralChatRequest(model: resolvedModel, messages: llmkitMessages, systemPrompt: systemPrompt)
-            request.reasoningEffort = reasoningEffort
-            let completion = try await MistralChatClient.chatCompletion(
-                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                request: request,
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
-            )
-            guard !completion.wasTruncated else { throw EnhancementError.outputTruncated }
-            return AIChatCompletionResult(text: completion.text, openRouterResult: nil)
-        }
-
         var request = ChatRequest(
             model: resolvedModel,
             system: systemPrompt,
@@ -86,34 +65,8 @@ extension AIService {
                 apiVersion: .forModel(resolvedModel)
             )
         case .anthropic:
-            if let reasoning = ReasoningConfig.anthropicReasoning(for: resolvedModel, level: reasoningLevel) {
-                // LLMkit can't send `thinking` or `output_config`, so a picked level uses the
-                // in-app client. Default stays on LLMkit, unchanged.
-                var request = AnthropicMessagesRequest(
-                    model: resolvedModel,
-                    messages: llmkitMessages,
-                    systemPrompt: systemPrompt
-                )
-                reasoning.apply(to: &request)
-                let completion = try await AnthropicMessagesClient.createMessage(
-                    apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                    request: request,
-                    timeout: requestTimeout.seconds,
-                    retryOnTimeout: requestTimeout.retryOnTimeout
-                )
-                guard !completion.wasTruncated else { throw EnhancementError.outputTruncated }
-                result = completion.text
-            } else {
-                result = try await AnthropicLLMClient.chatCompletion(
-                    apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                    model: resolvedModel,
-                    messages: llmkitMessages,
-                    systemPrompt: systemPrompt,
-                    timeout: requestTimeout.seconds,
-                    retryOnTimeout: requestTimeout.retryOnTimeout
-                )
-            }
-            return AIChatCompletionResult(text: result, openRouterResult: nil)
+            ReasoningConfig.anthropicReasoning(for: resolvedModel, level: reasoningLevel)?.apply(to: &request)
+            client = AnthropicChatClient(apiKey: try chatAPIKey(for: provider, modelName: resolvedModel))
         case .openRouter:
             let policy = OpenRouterRequestPolicy.lowLatency(
                 modelName: resolvedModel,
@@ -166,19 +119,13 @@ extension AIService {
                 String(localized: "VoiceInk Refine only supports transcript cleanup.")
             )
         case .ollama:
-            result = try await enhanceWithOllama(
-                text: localUserPrompt ?? chatPrompt(from: llmkitMessages),
-                systemPrompt: systemPrompt ?? "",
-                model: resolvedModel,
-                think: ReasoningConfig.ollamaThink(
-                    level: reasoningLevel,
-                    modelName: resolvedModel,
-                    modelInfo: reasoningModelInfo(for: .ollama, model: resolvedModel)
-                ),
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
+            request.temperature = ReasoningConfig.defaultTemperature
+            request.reasoning = ReasoningConfig.ollamaReasoning(
+                level: reasoningLevel,
+                modelName: resolvedModel,
+                modelInfo: reasoningModelInfo(for: .ollama, model: resolvedModel)
             )
-            return AIChatCompletionResult(text: result, openRouterResult: nil)
+            client = try ollamaChatClient()
         case .localCLI:
             result = try await enhanceWithLocalCLI(
                 systemPrompt: systemPrompt ?? "",
@@ -193,7 +140,8 @@ extension AIService {
             request.reasoning = ReasoningConfig.getReasoningParameter(
                 for: provider,
                 modelName: resolvedModel,
-                level: reasoningLevel
+                level: reasoningLevel,
+                modelInfo: reasoningModelInfo(for: provider, model: resolvedModel)
             ).map(ChatRequest.Reasoning.effort)
             request.extraBody = ReasoningConfig.extraBodyFields(for: provider, modelName: resolvedModel, level: reasoningLevel)
             client = OpenAICompatibleChatClient(
@@ -205,15 +153,20 @@ extension AIService {
         // Fast mode's fields go last, so they win over anything else in the body.
         request.extraBody.merge(fastMode?.bodyFields ?? [:]) { _, fast in fast }
         let completion = try await client.complete(request)
-        try Self.requireFinishedAnswer(completion)
+        try Self.requireFinishedAnswer(completion, from: provider)
         return AIChatCompletionResult(text: completion.text, openRouterResult: provider == .openRouter ? completion : nil)
     }
 
     /// Only a finished answer is used. A cut-off, filtered or failed one throws, so it's never
     /// pasted: a guardrail's replacement text, for example, comes back with text.
-    private static func requireFinishedAnswer(_ result: ChatResult) throws {
+    ///
+    /// A Custom endpoint can be any server, and some name a normal finish differently (such as
+    /// `eos_token`) or leave it out, so there an unrecognised finish with text is accepted.
+    private static func requireFinishedAnswer(_ result: ChatResult, from provider: AIProvider) throws {
         switch result.finishReason {
         case .stop:
+            return
+        case .other where provider == .custom:
             return
         case .length:
             throw EnhancementError.outputTruncated

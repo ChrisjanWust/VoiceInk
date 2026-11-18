@@ -67,7 +67,8 @@ struct ReasoningConfig {
     }
 
     // Verified live on 2026-11-17. The API also lists "xhigh", which VoiceInkChat can send,
-    // but in live tests only Gemini 4 Hydrogen and Neon accepted it, so it isn't offered yet.
+    // but in PR #11's live smoke run only gemini-4-hydrogen and gemini-4-neon accepted it, so
+    // it isn't offered yet.
     private static func geminiLevels(for modelName: String) -> [ReasoningLevel] {
         if geminiLowThinkingModels.contains(modelName) {
             return [.low, .medium, .high]
@@ -233,7 +234,8 @@ struct ReasoningConfig {
     // Models whose API default effort is medium rather than high.
     static let anthropicMediumDefaultEffortModels: Set<String> = ["claude-opus-5-5", "claude-haiku-5-5"]
 
-    /// LLMkit's `max_tokens`, which Default sends. Thinking counts toward it.
+    /// The `max_tokens` Default sends (VoiceInkChat's default, as LLMkit's was). Thinking
+    /// counts toward it.
     static let anthropicDefaultMaxTokens = 8192
 
     /// Strips a trailing `-YYYYMMDD` snapshot date.
@@ -265,22 +267,47 @@ struct ReasoningConfig {
         return anthropicMediumDefaultEffortModels.contains(family) ? .medium : .high
     }
 
-    /// The request fields a picked Anthropic level sets.
-    struct AnthropicReasoning: Equatable {
-        var thinking: AnthropicThinking
-        var effort: String?
-        var maxTokens: Int
+    /// The `thinking` field of an Anthropic Messages request.
+    enum AnthropicThinking: Equatable {
+        /// `{"type": "adaptive", "display": "omitted"}`: Claude decides whether and how much to think.
+        case adaptive
+        /// `{"type": "enabled", "budget_tokens": N, "display": "omitted"}`: a fixed budget.
+        case enabled(budgetTokens: Int)
+        /// `{"type": "disabled"}`.
+        case disabled
+        /// `{"type": "between_tools"}`: no up-front thinking (Claude Sonnet 5.5).
+        case betweenTools
 
-        func apply(to request: inout AnthropicMessagesRequest) {
-            request.thinking = thinking
-            request.effort = effort
-            request.maxTokens = maxTokens
+        /// Thinking blocks come back without text (`display: omitted`), since VoiceInk never
+        /// shows them.
+        var jsonValue: JSONValue {
+            switch self {
+            case .adaptive: return ["type": "adaptive", "display": "omitted"]
+            case .enabled(let budgetTokens):
+                return ["type": "enabled", "budget_tokens": .number(Double(budgetTokens)), "display": "omitted"]
+            case .disabled: return ["type": "disabled"]
+            case .betweenTools: return ["type": "between_tools"]
+            }
         }
     }
 
-    /// The reasoning fields for a picked level, or `nil` for Default, which LLMkit sends
-    /// without any. Thinking blocks are requested without text (`display: omitted`), since
-    /// VoiceInk never shows them.
+    /// The request fields a picked Anthropic level sets.
+    struct AnthropicReasoning: Equatable {
+        var thinking: AnthropicThinking
+        /// `output_config.effort`, such as `"low"` or `"max"`.
+        var effort: String?
+        var maxTokens: Int
+
+        func apply(to request: inout ChatRequest) {
+            request.maxTokens = maxTokens
+            request.extraBody["thinking"] = thinking.jsonValue
+            if let effort {
+                request.extraBody["output_config"] = ["effort": .string(effort)]
+            }
+        }
+    }
+
+    /// The reasoning fields for a picked level, or `nil` for Default, which sends none.
     static func anthropicReasoning(for modelName: String, level: ReasoningLevel?) -> AnthropicReasoning? {
         guard let level = effectiveLevel(level, for: .anthropic, modelName: modelName) else {
             return nil
@@ -295,7 +322,7 @@ struct ReasoningConfig {
             default: budget = 16_000
             }
             return AnthropicReasoning(
-                thinking: .enabled(budgetTokens: budget, display: .omitted),
+                thinking: .enabled(budgetTokens: budget),
                 effort: anthropicBudgetAndEffortModels.contains(family) ? level.effortValue : nil,
                 maxTokens: anthropicDefaultMaxTokens + budget
             )
@@ -311,7 +338,7 @@ struct ReasoningConfig {
 
         // xhigh and max think longer, and thinking counts toward `max_tokens`.
         let maxTokens = [.xhigh, .max].contains(level) ? 32_000 : anthropicDefaultMaxTokens
-        return AnthropicReasoning(thinking: .adaptive(display: .omitted), effort: level.effortValue, maxTokens: maxTokens)
+        return AnthropicReasoning(thinking: .adaptive, effort: level.effortValue, maxTokens: maxTokens)
     }
 
     // MARK: - Mistral
@@ -335,16 +362,6 @@ struct ReasoningConfig {
     /// send `modelName`.
     private static func mistralLevels(for modelName: String, aliasTargets: [String]) -> [ReasoningLevel] {
         ([modelName] + aliasTargets).contains(where: mistralNoneOrHighModels.contains) ? [.off, .high] : []
-    }
-
-    /// The `reasoning_effort` for a picked level, or `nil` for Default, which LLMkit sends
-    /// without one.
-    static func mistralReasoningEffort(
-        for modelName: String,
-        level: ReasoningLevel?,
-        modelInfo: ReasoningModelInfo = ReasoningModelInfo()
-    ) -> String? {
-        effectiveLevel(level, for: .mistral, modelName: modelName, modelInfo: modelInfo)?.effortValue
     }
 
     // MARK: - Shared
@@ -481,12 +498,16 @@ struct ReasoningConfig {
 
     // MARK: - OpenAI-compatible requests
 
+    /// `reasoning_effort` for an OpenAI-compatible request: the picked level, or what Default
+    /// sends. `modelInfo` matters for Mistral, whose `-latest` aliases take the levels of the
+    /// dated ID they point to.
     static func getReasoningParameter(
         for provider: AIProvider,
         modelName: String,
-        level: ReasoningLevel? = nil
+        level: ReasoningLevel? = nil,
+        modelInfo: ReasoningModelInfo = ReasoningModelInfo()
     ) -> String? {
-        if let level = effectiveLevel(level, for: provider, modelName: modelName) {
+        if let level = effectiveLevel(level, for: provider, modelName: modelName, modelInfo: modelInfo) {
             return level.effortValue
         }
 
@@ -608,18 +629,20 @@ struct ReasoningConfig {
         return levels.isEmpty ? [.enabled] : levels
     }
 
-    /// Default keeps `think: false` for low latency.
-    static func ollamaThink(level: ReasoningLevel?, modelName: String, modelInfo: ReasoningModelInfo) -> OllamaThink {
+    /// Ollama's `think`: a named level, `true` for on/off models, and `false` on Default for
+    /// low latency.
+    static func ollamaReasoning(
+        level: ReasoningLevel?,
+        modelName: String,
+        modelInfo: ReasoningModelInfo
+    ) -> ChatRequest.Reasoning {
         switch effectiveLevel(level, for: .ollama, modelName: modelName, modelInfo: modelInfo) {
         case .enabled:
-            return .enabled(true)
+            return .enabled
         case let level?:
-            if let value = level.effortValue {
-                return .level(value)
-            }
-            return .enabled(false)
+            return level.effortValue.map(ChatRequest.Reasoning.effort) ?? .disabled
         case nil:
-            return .enabled(false)
+            return .disabled
         }
     }
 }

@@ -821,22 +821,10 @@ class AIService: ObservableObject {
         }
     }
 
-    func enhanceWithOllama(
-        text: String,
-        systemPrompt: String,
-        model: String? = nil,
-        think: OllamaThink = .enabled(false),
-        timeout: TimeInterval = 30,
-        retryOnTimeout: Bool = false
-    ) async throws -> String {
-        try await ollamaService.enhance(
-            text,
-            withSystemPrompt: systemPrompt,
-            model: model,
-            think: think,
-            timeout: timeout,
-            retryOnTimeout: retryOnTimeout
-        )
+    /// The chat client for the configured Ollama server.
+    func ollamaChatClient() throws -> OllamaEnhancementClient {
+        guard let url = URL(string: ollamaService.baseURL) else { throw LocalAIError.invalidURL }
+        return OllamaEnhancementClient(baseURL: url)
     }
 
     func enhanceWithVoiceInkRefine(transcript: String, vocabulary: RecordingVocabulary) async throws -> String {

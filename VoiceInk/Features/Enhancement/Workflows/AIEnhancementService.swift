@@ -247,7 +247,7 @@ class AIEnhancementService: ObservableObject {
             let filteredResult = AIEnhancementOutputFilter.filter(
                 completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
             )
-            guard provider == .ollama || provider == .localCLI || !filteredResult.isEmpty else {
+            guard provider == .localCLI || !filteredResult.isEmpty else {
                 throw EnhancementError.enhancementFailed
             }
             return (
@@ -292,8 +292,10 @@ class AIEnhancementService: ObservableObject {
             return .customError("HTTP \(statusCode): \(message)")
         case .noResultReturned:
             return .enhancementFailed
-        case .networkError:
-            return .networkError
+        case .networkError(let detail, _):
+            // The system's own description, such as "The Internet connection appears to be
+            // offline.", which is what LLMkit's rethrown URLError showed.
+            return .customError(detail)
         case .timeout:
             return .timeout
         case .invalidURL, .unsupported, .decodingError, .encodingError:
