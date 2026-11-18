@@ -28,7 +28,9 @@ struct ReasoningConfig {
         "gemini-3.1-flash-lite",
     ]
 
-    // Thinking is off unless a level is sent, and "minimal" is not accepted.
+    // Thinking is off by default. LLMkit sends non-preview models to `/v1/interactions`,
+    // which rejects every thinking level for these ("Thinking is not enabled for api
+    // version v1"), so they stay on Default. (`/v1beta` accepts only "low" and "high".)
     static let geminiThinkingOffByDefaultModels: Set<String> = [
         "gemini-2.5-flash-lite"
     ]
@@ -58,8 +60,13 @@ struct ReasoningConfig {
         }
     }
 
+    // Verified live on 2026-11-17. The API also lists "xhigh", but LLMkit's
+    // GeminiThinkingLevel can't send it yet.
     private static func geminiLevels(for modelName: String) -> [ReasoningLevel] {
-        if geminiLowThinkingModels.contains(modelName) || geminiThinkingOffByDefaultModels.contains(modelName) {
+        if geminiThinkingOffByDefaultModels.contains(modelName) {
+            return []
+        }
+        if geminiLowThinkingModels.contains(modelName) {
             return [.low, .medium, .high]
         }
         return [.minimal, .low, .medium, .high]
@@ -126,6 +133,8 @@ struct ReasoningConfig {
         "qwen-3.8-27b"
     ]
 
+    // Verified live on 2026-11-17: Qwen takes none/low/medium/high, GPT-OSS takes
+    // low/medium/high, and both reject minimal/xhigh/max.
     private static func cerebrasLevels(for modelName: String) -> [ReasoningLevel] {
         if cerebrasGPTOSSMinimumReasoningModels.contains(modelName) {
             return [.low, .medium, .high]
