@@ -68,11 +68,11 @@ public struct BedrockChatClient: ChatClient {
 
     /// Accepts keys pasted with a `Bearer ` prefix.
     public static func normalizedAPIKey(_ apiKey: String) -> String {
-        var key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if key.lowercased().hasPrefix("bearer ") {
-            key = String(key.dropFirst("bearer ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let prefix = key.range(of: #"^bearer(\s+|$)"#, options: [.regularExpression, .caseInsensitive]) else {
+            return key
         }
-        return key
+        return String(key[prefix.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Region codes such as `us-east-1`, `eu-central-2` and `us-gov-west-1`.
