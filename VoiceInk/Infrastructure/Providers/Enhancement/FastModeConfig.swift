@@ -46,6 +46,60 @@ enum FastModeConfig {
         "gpt-5.2",
     ]
 
+    // MARK: - Anthropic
+
+    /// Models that take `speed: "fast"` on the Messages API without a beta header. Measured
+    /// through VoiceInkChat on 2026-11-18: Claude Opus 5.5 median 1.76 s to 0.76 s over 6
+    /// interleaved runs, and faster at Low, High and Extra High reasoning too. Sonnet 5.5 and
+    /// Haiku 5.5 reject `speed`; Opus 5 needs a beta header and a waitlisted rate limit.
+    static let anthropicFastModels: Set<String> = [
+        "claude-opus-5-5"
+    ]
+
+    // MARK: - Gemini
+
+    /// Models that take `service_tier: "priority"` (Priority inference) on the Interactions API,
+    /// kept for their worst case: on 2026-11-18 the standard tier sometimes queued them for about
+    /// 100 s (max 100.8 s and 95.9 s over 6 runs), and priority's max was 16.3 s and 18.1 s. Later
+    /// that day, through VoiceInkChat, neither tier queued and the medians were flat. The Flash,
+    /// Flash-Lite and Pro preview models' small gains didn't hold, so they're left out.
+    static let geminiPriorityModels: Set<String> = [
+        "gemini-4-carbon",
+        "gemini-4-argon",
+    ]
+
+    // MARK: - Vercel AI Gateway
+
+    /// Models that AI Gateway served at `priority` for `providerOptions.gateway.serviceTier` and
+    /// that answered faster in both of two sweeps through VoiceInkChat on 2026-11-18 (9 to 14
+    /// interleaved runs per mode, pooled median 11-48% lower). Left out: models the gateway
+    /// served at the default tier, and models no faster with it, which were most Google and
+    /// all SpaceXAI models, plus gpt-5.4-mini and gpt-5.6-terra.
+    static let vercelAIGatewayPriorityModels: Set<String> = [
+        "openai/gpt-6-astra",
+        "openai/gpt-6.1-terra",
+        "openai/gpt-6.1-sol",
+        "openai/gpt-6.2-astra",
+        "openai/gpt-6.2-sol",
+        "openai/gpt-6-luna",
+        "openai/gpt-6-sol",
+        "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-sol",
+        "openai/gpt-5.5",
+        "openai/gpt-5.4",
+        "openai/gpt-5.3-codex",
+        "openai/gpt-5.2",
+        "openai/gpt-5.1-thinking",
+        "openai/gpt-5",
+        "openai/gpt-5-mini",
+        "openai/gpt-4.1",
+        "openai/gpt-4.1-mini",
+        "openai/gpt-4o",
+        "openai/gpt-4o-mini",
+        "openai/o3",
+        "google/gemini-3.7-flash",
+    ]
+
     // MARK: - Amazon Bedrock
 
     /// Model IDs that take `performanceConfig: { latency: "optimized" }` on Converse, measured
@@ -60,18 +114,26 @@ enum FastModeConfig {
     // MARK: - Shared
 
     /// Providers whose request path applies the parameters, so the toggle shows for them.
-    static let appliedProviders: Set<AIProvider> = [.openAI, .bedrock]
+    static let appliedProviders: Set<AIProvider> = [.openAI, .gemini, .anthropic, .vercelAIGateway, .bedrock]
 
     /// The provider's fast-tier fields for this model, or `nil` when the model has none.
     ///
     /// Not mapped: Groq's faster Performance tier is enterprise-only, Cerebras service tiers are
     /// a private preview on dedicated endpoints (shared inference ignores `service_tier`),
     /// Mistral's Priority tier needs a sales contract, and Ollama and custom endpoints have no
-    /// standard fast tier.
+    /// standard fast tier. Fireworks' `service_tier: "priority"` showed no gain in three rounds.
+    /// Baseten, Together AI and GMI Cloud sell speed as separate models or dedicated endpoints,
+    /// not as a request option.
     static func mapping(for provider: AIProvider, modelName: String) -> FastModeRequestParameters? {
         switch provider {
         case .openAI where openAIPriorityModels.contains(modelName):
             return FastModeRequestParameters(bodyFields: ["service_tier": "priority"])
+        case .gemini where geminiPriorityModels.contains(modelName):
+            return FastModeRequestParameters(bodyFields: ["service_tier": "priority"])
+        case .anthropic where anthropicFastModels.contains(modelName):
+            return FastModeRequestParameters(bodyFields: ["speed": "fast"])
+        case .vercelAIGateway where vercelAIGatewayPriorityModels.contains(modelName):
+            return FastModeRequestParameters(bodyFields: ["providerOptions": ["gateway": ["serviceTier": "priority"]]])
         case .bedrock where bedrockLatencyOptimizedModels.contains(modelName):
             return FastModeRequestParameters(bodyFields: ["performanceConfig": ["latency": "optimized"]])
         default:
@@ -102,6 +164,10 @@ enum FastModeConfig {
         switch provider {
         case .openAI:
             return String(localized: "Uses OpenAI priority processing, billed at a higher rate than standard.")
+        case .gemini:
+            return String(localized: "Uses Gemini priority processing, billed at a higher rate; avoids slow queueing at busy times.")
+        case .anthropic:
+            return String(localized: "Uses Anthropic fast mode, billed at a higher rate than standard.")
         case .bedrock:
             return String(localized: "Uses Bedrock latency-optimized inference, billed at a higher rate.")
         default:
