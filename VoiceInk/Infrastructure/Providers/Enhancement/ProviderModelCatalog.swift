@@ -565,11 +565,11 @@ enum ProviderModelCatalog {
     // Public: the list answers without a key, so it can't verify one.
     static let vercelAIGatewayModelsEndpoint = URL(string: "https://ai-gateway.vercel.sh/v1/models")!
 
-    /// A Vercel AI Gateway model VoiceInk can use, with the reasoning efforts its catalog
-    /// entry lists.
+    /// A Vercel AI Gateway model VoiceInk can use, with the reasoning controls its catalog
+    /// entry lists (`reasoning_options`).
     struct VercelAIGatewayModel: Equatable, Sendable {
         let id: String
-        let reasoningEfforts: [String]
+        let reasoning: VercelAIGatewayReasoningOptions
     }
 
     static func fetchVercelAIGatewayModels(apiKey: String, timeout: TimeInterval = 15) async throws
@@ -608,10 +608,12 @@ enum ProviderModelCatalog {
             }
             .reduce(into: [VercelAIGatewayModel]()) { models, model in
                 guard !models.contains(where: { $0.id == model.id }) else { return }
-                let efforts = (model.reasoningOptions ?? [])
-                    .filter { $0.type == "effort" }
-                    .flatMap { $0.values ?? [] }
-                models.append(VercelAIGatewayModel(id: model.id, reasoningEfforts: efforts))
+                let options = model.reasoningOptions ?? []
+                let reasoning = VercelAIGatewayReasoningOptions(
+                    efforts: options.filter { $0.type == "effort" }.flatMap { $0.values ?? [] },
+                    canToggle: options.contains { $0.type == "toggle" }
+                )
+                models.append(VercelAIGatewayModel(id: model.id, reasoning: reasoning))
             }
     }
 

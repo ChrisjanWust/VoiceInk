@@ -116,22 +116,53 @@ enum HostedModelProviders {
 
     // MARK: - Vercel AI Gateway
 
-    /// The gateway's catalog lists each model's efforts (`reasoning_options`), and it maps
-    /// `reasoning_effort` onto every upstream provider's own control. Live tests: `none`
-    /// turned reasoning off on every model that reasons, including some whose catalog entry
-    /// doesn't list it, and returned 200 on models that don't reason. So Default sends `none`
-    /// to every model, and the levels come from the catalog, minus `none` (shown as Off) and
-    /// the levels measured too slow.
+    /// The gateway maps `reasoning_effort` onto each upstream provider's own control, and its
+    /// catalog lists each model's efforts and whether reasoning can be switched off
+    /// (`reasoning_options`). In live tests on 130 models, `none` returned 200 on all but two,
+    /// turned reasoning off on every model that reasons, and changed nothing on models that
+    /// don't. So Default sends `none` unless the catalog lists efforts without `none` or a
+    /// toggle (then the lowest listed effort, which the catalog promises), with exceptions
+    /// from the live tests. The levels come from the catalog, minus those measured too slow.
     private static func vercelAIGatewayReasoning(for modelName: String) -> ModelReasoning {
-        let efforts = VercelAIGatewayReasoningStore.shared.efforts(for: modelName)
-            ?? vercelAIGatewayBuiltInEfforts[modelName]
-            ?? []
+        let options = VercelAIGatewayReasoningStore.shared.options(for: modelName)
+            ?? vercelAIGatewayBuiltInOptions[modelName]
+        let defaultEffort = vercelAIGatewayDefaultEffort(for: modelName, options: options)
         let tooSlow = vercelAIGatewayTooSlowLevels[modelName] ?? []
-        let levels = efforts
-            .compactMap(ReasoningLevel.init(effortValue:))
-            .filter { $0 != .off && !tooSlow.contains($0) }
-        return ModelReasoning(defaultEffort: "none", levels: [.off] + ReasoningLevel.allCases.filter(levels.contains))
+        let efforts = Set((options?.efforts ?? []).compactMap(ReasoningLevel.init(effortValue:)))
+        let levels = ReasoningLevel.allCases.filter { level in
+            if level == .off { return defaultEffort == "none" }
+            return efforts.contains(level) && !tooSlow.contains(level)
+        }
+        return ModelReasoning(defaultEffort: defaultEffort, levels: levels)
     }
+
+    private static func vercelAIGatewayDefaultEffort(
+        for modelName: String,
+        options: VercelAIGatewayReasoningOptions?
+    ) -> String? {
+        if vercelAIGatewayRejectsNone.contains(modelName) {
+            return vercelAIGatewayDefaultEffortOverrides[modelName]
+        }
+        guard let options, !options.efforts.isEmpty else {
+            // No efforts listed: either no reasoning control, where `none` is accepted and
+            // changes nothing, or only a toggle, which `none` switches off.
+            return "none"
+        }
+        if options.canToggle || options.efforts.contains("none") || vercelAIGatewayAcceptsNone.contains(modelName) {
+            return "none"
+        }
+        return ReasoningLevel.allCases.first { level in
+            level.effortValue.map(options.efforts.contains) == true
+        }?.effortValue
+    }
+}
+
+/// What a Vercel AI Gateway catalog entry says about reasoning.
+struct VercelAIGatewayReasoningOptions: Equatable, Sendable {
+    /// `reasoning_effort` values the model takes, such as `none`, `low` or `xhigh`.
+    let efforts: [String]
+    /// Whether reasoning can be switched on and off.
+    let canToggle: Bool
 }
 
 extension ProviderModelCatalog {
@@ -140,31 +171,40 @@ extension ProviderModelCatalog {
     }
 }
 
-/// The reasoning efforts from the last Vercel AI Gateway catalog fetch, keyed by model ID.
+/// The reasoning options from the last Vercel AI Gateway catalog fetch, keyed by model ID.
 final class VercelAIGatewayReasoningStore: @unchecked Sendable {
     static let shared = VercelAIGatewayReasoningStore()
 
-    private static let defaultsKey = "VercelAIGatewayReasoningEfforts"
+    private static let defaultsKey = "VercelAIGatewayReasoningOptions"
+    private static let effortsKey = "efforts"
+    private static let toggleKey = "toggle"
     private let lock = NSLock()
     private let defaults = UserDefaults.standard
-    private var cache: [String: [String]]?
+    private var cache: [String: VercelAIGatewayReasoningOptions]?
 
     private init() {}
 
-    func efforts(for modelName: String) -> [String]? {
+    func options(for modelName: String) -> VercelAIGatewayReasoningOptions? {
         lock.withLock {
             if cache == nil {
-                cache = defaults.dictionary(forKey: Self.defaultsKey) as? [String: [String]] ?? [:]
+                let saved = defaults.dictionary(forKey: Self.defaultsKey) as? [String: [String: Any]] ?? [:]
+                cache = saved.mapValues { entry in
+                    VercelAIGatewayReasoningOptions(
+                        efforts: entry[Self.effortsKey] as? [String] ?? [],
+                        canToggle: entry[Self.toggleKey] as? Bool ?? false
+                    )
+                }
             }
             return cache?[modelName]
         }
     }
 
     func save(_ models: [ProviderModelCatalog.VercelAIGatewayModel]) {
-        let efforts = Dictionary(models.map { ($0.id, $0.reasoningEfforts) }, uniquingKeysWith: { first, _ in first })
+        let options = Dictionary(models.map { ($0.id, $0.reasoning) }, uniquingKeysWith: { first, _ in first })
+        let saved = options.mapValues { [Self.effortsKey: $0.efforts, Self.toggleKey: $0.canToggle] as [String: Any] }
         lock.withLock {
-            cache = efforts
-            defaults.set(efforts, forKey: Self.defaultsKey)
+            cache = options
+            defaults.set(saved, forKey: Self.defaultsKey)
         }
     }
 }
