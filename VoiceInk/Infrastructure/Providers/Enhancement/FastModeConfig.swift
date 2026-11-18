@@ -56,6 +56,18 @@ enum FastModeConfig {
         "claude-opus-5-5"
     ]
 
+    // MARK: - Gemini
+
+    /// Models that take `service_tier: "priority"` (Priority inference) on the Interactions API,
+    /// kept for their worst case: on 2026-11-18 the standard tier sometimes queued them for about
+    /// 100 s (max 100.8 s and 95.9 s over 6 runs), and priority's max was 16.3 s and 18.1 s. Later
+    /// that day, through VoiceInkChat, neither tier queued and the medians were flat. The Flash,
+    /// Flash-Lite and Pro preview models' small gains didn't hold, so they're left out.
+    static let geminiPriorityModels: Set<String> = [
+        "gemini-4-carbon",
+        "gemini-4-argon",
+    ]
+
     // MARK: - Vercel AI Gateway
 
     /// Models that AI Gateway served at `priority` for `providerOptions.gateway.serviceTier` and
@@ -102,20 +114,21 @@ enum FastModeConfig {
     // MARK: - Shared
 
     /// Providers whose request path applies the parameters, so the toggle shows for them.
-    static let appliedProviders: Set<AIProvider> = [.openAI, .anthropic, .vercelAIGateway, .bedrock]
+    static let appliedProviders: Set<AIProvider> = [.openAI, .gemini, .anthropic, .vercelAIGateway, .bedrock]
 
     /// The provider's fast-tier fields for this model, or `nil` when the model has none.
     ///
     /// Not mapped: Groq's faster Performance tier is enterprise-only, Cerebras service tiers are
     /// a private preview on dedicated endpoints (shared inference ignores `service_tier`),
     /// Mistral's Priority tier needs a sales contract, and Ollama and custom endpoints have no
-    /// standard fast tier. Gemini's Priority inference showed no gain through VoiceInkChat on
-    /// 2026-11-18 (16 runs per model), and Fireworks' `service_tier: "priority"` none in three
-    /// rounds. Baseten, Together AI and GMI Cloud sell speed as separate models or dedicated
-    /// endpoints, not as a request option.
+    /// standard fast tier. Fireworks' `service_tier: "priority"` showed no gain in three rounds.
+    /// Baseten, Together AI and GMI Cloud sell speed as separate models or dedicated endpoints,
+    /// not as a request option.
     static func mapping(for provider: AIProvider, modelName: String) -> FastModeRequestParameters? {
         switch provider {
         case .openAI where openAIPriorityModels.contains(modelName):
+            return FastModeRequestParameters(bodyFields: ["service_tier": "priority"])
+        case .gemini where geminiPriorityModels.contains(modelName):
             return FastModeRequestParameters(bodyFields: ["service_tier": "priority"])
         case .anthropic where anthropicFastModels.contains(modelName):
             return FastModeRequestParameters(bodyFields: ["speed": "fast"])
@@ -151,6 +164,8 @@ enum FastModeConfig {
         switch provider {
         case .openAI:
             return String(localized: "Uses OpenAI priority processing, billed at a higher rate than standard.")
+        case .gemini:
+            return String(localized: "Uses Gemini priority processing, billed at a higher rate; avoids slow queueing at busy times.")
         case .anthropic:
             return String(localized: "Uses Anthropic fast mode, billed at a higher rate than standard.")
         case .bedrock:
