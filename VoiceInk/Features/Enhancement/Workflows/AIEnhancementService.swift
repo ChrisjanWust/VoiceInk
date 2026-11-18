@@ -390,10 +390,9 @@ class AIEnhancementService: ObservableObject {
 
         for index in updatedConfigurations.indices {
             if let provider = AIProvider(rawValue: updatedConfigurations[index].selectedAIProvider ?? ""),
-                provider == .gemini || provider == .openRouter || provider == .vercelAIGateway,
                 let modelName = updatedConfigurations[index].selectedAIModel
             {
-                let currentModel = GeminiModelMigration.resolvedModel(modelName, for: provider)
+                let currentModel = EnhancementModelMigration.resolvedModel(modelName, for: provider)
                 if currentModel != modelName {
                     updatedConfigurations[index].selectedAIModel = currentModel
                     didUpdateModes = true
@@ -403,16 +402,6 @@ class AIEnhancementService: ObservableObject {
             if updatedConfigurations[index].selectedAIProvider == AIProvider.voiceInkRefine.rawValue {
                 if updatedConfigurations[index].selectedAIModel != VoiceInkRefineService.modelName {
                     updatedConfigurations[index].selectedAIModel = VoiceInkRefineService.modelName
-                    didUpdateModes = true
-                }
-            }
-
-            if updatedConfigurations[index].selectedAIProvider == AIProvider.cerebras.rawValue,
-                let modelName = updatedConfigurations[index].selectedAIModel
-            {
-                let currentModel = CerebrasModelMigration.resolvedModel(modelName, for: .cerebras)
-                if currentModel != modelName {
-                    updatedConfigurations[index].selectedAIModel = currentModel
                     didUpdateModes = true
                 }
             }
