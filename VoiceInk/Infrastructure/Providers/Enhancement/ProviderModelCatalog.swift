@@ -29,6 +29,7 @@ enum ProviderModelCatalog {
     static let geminiModelsEndpoint = URL(string: "https://generativelanguage.googleapis.com/v1beta/models")!
     static let geminiStableModelsEndpoint = URL(string: "https://generativelanguage.googleapis.com/v1/models")!
     static let anthropicModelsEndpoint = URL(string: "https://api.anthropic.com/v1/models")!
+    static let anthropicAPIVersion = "2023-06-01"
     static let groqModelsEndpoint = URL(string: "https://api.groq.com/openai/v1/models")!
     static let cerebrasModelsEndpoint = URL(string: "https://api.cerebras.ai/v1/models")!
     static let mistralModelsEndpoint = URL(string: "https://api.mistral.ai/v1/models")!
@@ -203,8 +204,8 @@ enum ProviderModelCatalog {
 
             var request = URLRequest(url: components.url!)
             request.setValue(trimmedKey, forHTTPHeaderField: "x-api-key")
-            // The same version LLMkit sends with enhancement requests.
-            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            // The same version enhancement requests send.
+            request.setValue(anthropicAPIVersion, forHTTPHeaderField: "anthropic-version")
 
             let page = try decode(AnthropicModelList.self, from: try await perform(request, timeout: timeout))
             models.append(contentsOf: page.data)
@@ -602,12 +603,20 @@ enum ProviderModelCatalog {
             .uniqued()
     }
 
-    // MARK: - Key verification for Together AI, GMI Cloud, Baseten, Fireworks AI, Vercel AI Gateway
+    // MARK: - Key verification
 
-    /// An authenticated GET that needs no model ID. Vercel's model list is public, so its key
-    /// is checked against `/v1/credits` instead.
+    /// An authenticated GET that needs no model ID: the models list for most providers. Vercel's
+    /// model list is public, so its key is checked against `/v1/credits`, and OpenRouter's
+    /// against `/key`.
     static func keyVerificationEndpoint(for provider: AIProvider) -> URL? {
         switch provider {
+        case .openAI: return openAIModelsEndpoint
+        case .anthropic: return anthropicModelsEndpoint
+        case .gemini: return geminiStableModelsEndpoint
+        case .groq: return groqModelsEndpoint
+        case .cerebras: return cerebrasModelsEndpoint
+        case .mistral: return mistralModelsEndpoint
+        case .openRouter: return URL(string: "https://openrouter.ai/api/v1/key")
         case .togetherAI: return URL(string: "https://api.together.xyz/v1/models")
         case .gmiCloud: return gmiCloudModelsEndpoint
         case .baseten: return basetenModelsEndpoint
@@ -624,8 +633,17 @@ enum ProviderModelCatalog {
             return (false, "Invalid or missing base URL configuration")
         }
         do {
+            let key = try validatedKey(apiKey)
             var request = URLRequest(url: endpoint)
-            request.setValue("Bearer \(try validatedKey(apiKey))", forHTTPHeaderField: "Authorization")
+            switch provider {
+            case .anthropic:
+                request.setValue(key, forHTTPHeaderField: "x-api-key")
+                request.setValue(anthropicAPIVersion, forHTTPHeaderField: "anthropic-version")
+            case .gemini:
+                request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
+            default:
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            }
             _ = try await perform(request, timeout: timeout)
             return (true, nil)
         } catch {

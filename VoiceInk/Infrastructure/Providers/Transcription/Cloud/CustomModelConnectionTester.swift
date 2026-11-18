@@ -1,5 +1,4 @@
 import Foundation
-import LLMkit
 
 enum ConnectionTestResult {
     case success
@@ -65,8 +64,8 @@ struct CustomModelConnectionTester {
         }
     }
 
-    /// Verifies an OpenAI-compatible chat endpoint using the same request
-    /// LLMkit performs when a custom enhancement model is added.
+    /// Verifies an OpenAI-compatible chat endpoint with a minimal chat request, since a custom
+    /// server may not list its models.
     static func testEnhancementEndpoint(baseURL: String, apiKey: String, modelName: String) async
         -> ConnectionTestResult
     {
@@ -74,13 +73,37 @@ struct CustomModelConnectionTester {
             return .failure(
                 message: String(localized: "Base URL must use HTTPS (plain HTTP is allowed only for localhost)"))
         }
-
-        let result = await OpenAILLMClient.verifyAPIKey(baseURL: url, apiKey: apiKey, model: modelName)
-
-        if result.isValid {
-            return .success
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .failure(message: String(localized: "API key is missing or empty."))
         }
-        return .failure(message: result.errorMessage ?? String(localized: "Could not verify this API key"))
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "model": modelName,
+            "messages": [["role": "user", "content": "test"]],
+        ])
+
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.finishTasksAndInvalidate() }
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return .failure(message: String(localized: "Unexpected response from the server"))
+            }
+            if httpResponse.statusCode == 200 {
+                return .success
+            }
+            return .failure(
+                message: String(format: String(localized: "HTTP %lld: %@"), Int64(httpResponse.statusCode), Self.serverMessage(from: data))
+            )
+        } catch {
+            return .failure(message: error.localizedDescription)
+        }
     }
 
     /// HTTPS everywhere; plain HTTP only toward loopback, matching the app's

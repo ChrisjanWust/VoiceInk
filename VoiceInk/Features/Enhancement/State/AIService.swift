@@ -673,50 +673,29 @@ class AIService: ObservableObject {
         let result: (isValid: Bool, errorMessage: String?)
 
         switch provider {
-        case .anthropic:
-            result = await AnthropicLLMClient.verifyAPIKey(key)
         case .elevenLabs:
             result = await ElevenLabsClient.verifyAPIKey(key)
         case .deepgram:
             result = await DeepgramClient.verifyAPIKey(key)
-        case .mistral:
-            result = await MistralTranscriptionClient.verifyAPIKey(key)
         case .soniox:
             result = await SonioxClient.verifyAPIKey(key)
         case .speechmatics:
             result = await SpeechmaticsClient.verifyAPIKey(key)
         case .assemblyAI:
             result = await AssemblyAIClient.verifyAPIKey(key)
-        case .openRouter:
-            result = await OpenRouterClient.verifyAPIKey(key)
-        case .openAI:
-            result = await OpenAILLMClient.verifyAPIKey(key)
-        case .gemini:
-            result = await GeminiLLMClient.verifyAPIKey(key)
         case .bedrock:
             result = await BedrockEnhancementClient.verifyAPIKey(
                 key,
                 region: BedrockRegion.current,
                 modelID: verificationModel
             )
-        case .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
+        case .openAI, .anthropic, .gemini, .groq, .cerebras, .mistral, .openRouter,
+            .togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway:
             // An authenticated GET checks the key without depending on a model ID.
             result = await ProviderModelCatalog.verifyAPIKey(key, for: provider)
-        case .cerebras:
-            // GET /v1/models checks the key without depending on a model ID.
-            result = await OpenAITranscriptionClient.verifyAPIKey(
-                baseURL: URL(string: "https://api.cerebras.ai")!,
-                apiKey: key
-            )
         default:
-            guard let baseURL = URL(string: provider.baseURL) else {
-                return (false, "Invalid or missing base URL configuration")
-            }
-            result = await OpenAILLMClient.verifyAPIKey(
-                baseURL: baseURL,
-                apiKey: key,
-                model: verificationModel
-            )
+            // Custom endpoints are checked in their own editor (CustomModelConnectionTester).
+            result = (false, "Invalid or missing base URL configuration")
         }
 
         return result
