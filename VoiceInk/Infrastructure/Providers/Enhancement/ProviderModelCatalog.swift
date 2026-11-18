@@ -569,30 +569,18 @@ enum ProviderModelCatalog {
     // Public: the list answers without a key, so it can't verify one.
     static let vercelAIGatewayModelsEndpoint = URL(string: "https://ai-gateway.vercel.sh/v1/models")!
 
-    /// A Vercel AI Gateway model VoiceInk can use, with the reasoning controls its catalog
-    /// entry lists (`reasoning_options`).
-    struct VercelAIGatewayModel: Equatable, Sendable {
-        let id: String
-        let reasoning: VercelAIGatewayReasoningOptions
-    }
-
-    static func fetchVercelAIGatewayModels(apiKey: String, timeout: TimeInterval = 15) async throws
-        -> [VercelAIGatewayModel]
-    {
+    static func fetchVercelAIGatewayModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
         var request = URLRequest(url: vercelAIGatewayModelsEndpoint)
         request.setValue("Bearer \(try validatedKey(apiKey))", forHTTPHeaderField: "Authorization")
-        let models = try vercelAIGatewayEnhancementModels(from: try await perform(request, timeout: timeout))
-        guard !models.isEmpty else { throw CatalogError.noUsableModels }
-        return models
+        let ids = try vercelAIGatewayEnhancementModelIDs(from: try await perform(request, timeout: timeout))
+        guard !ids.isEmpty else { throw CatalogError.noUsableModels }
+        return ids
     }
 
     /// Keeps the `language` models that return only text. The list also has image, video,
     /// embedding, evaluation, speech, transcription, realtime and reranking models, and
     /// `-batch` aliases that run through the batch API.
-    static func vercelAIGatewayEnhancementModels(
-        from data: Data,
-        now: Date = Date()
-    ) throws -> [VercelAIGatewayModel] {
+    static func vercelAIGatewayEnhancementModelIDs(from data: Data, now: Date = Date()) throws -> [String] {
         try decode(VercelAIGatewayModelList.self, from: data).data
             .filter { model in
                 model.type == "language"
@@ -610,15 +598,8 @@ enum ProviderModelCatalog {
                 if lhs.released != rhs.released { return (lhs.released ?? 0) > (rhs.released ?? 0) }
                 return lhs.id.localizedStandardCompare(rhs.id) == .orderedAscending
             }
-            .reduce(into: [VercelAIGatewayModel]()) { models, model in
-                guard !models.contains(where: { $0.id == model.id }) else { return }
-                let options = model.reasoningOptions ?? []
-                let reasoning = VercelAIGatewayReasoningOptions(
-                    efforts: options.filter { $0.type == "effort" }.flatMap { $0.values ?? [] },
-                    canToggle: options.contains { $0.type == "toggle" }
-                )
-                models.append(VercelAIGatewayModel(id: model.id, reasoning: reasoning))
-            }
+            .map(\.id)
+            .uniqued()
     }
 
     // MARK: - Key verification for Together AI, GMI Cloud, Baseten, Fireworks AI, Vercel AI Gateway
@@ -1013,16 +994,10 @@ private struct VercelAIGatewayCatalogModel: Decodable {
         let output: [String]?
     }
 
-    struct ReasoningOption: Decodable {
-        let type: String
-        let values: [String]?
-    }
-
     let id: String
     let type: String?
     let released: Int?
     let modalities: Modalities?
-    let reasoningOptions: [ReasoningOption]?
     /// When the gateway stops serving the model, in milliseconds since 1970. Set ahead of time,
     /// so a model with a future date still works.
     let deprecatedAt: Double?
@@ -1032,7 +1007,6 @@ private struct VercelAIGatewayCatalogModel: Decodable {
         case type
         case released
         case modalities
-        case reasoningOptions = "reasoning_options"
         case deprecatedAt = "deprecated_at"
     }
 

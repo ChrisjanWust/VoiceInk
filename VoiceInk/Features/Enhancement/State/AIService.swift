@@ -94,7 +94,7 @@ enum AIProvider: String, CaseIterable, Sendable {
         case .togetherAI:
             return "deepseek-ai/DeepSeek-V4.1-Flash"
         case .gmiCloud:
-            return "deepseek-ai/deepseek-v4.1-flash-1017"
+            return "deepseek-ai/DeepSeek-V4.1-Flash"
         case .baseten:
             return "deepseek-ai/DeepSeek-V4.1-Flash"
         case .fireworks:
@@ -1032,11 +1032,7 @@ class AIService: ObservableObject {
                 case .fireworks:
                     return try await ProviderModelCatalog.fetchFireworksModelIDs(apiKey: apiKey)
                 case .vercelAIGateway:
-                    // The catalog also lists each model's reasoning efforts, which the
-                    // Reasoning picker offers.
-                    let models = try await ProviderModelCatalog.fetchVercelAIGatewayModels(apiKey: apiKey)
-                    VercelAIGatewayReasoningStore.shared.save(models)
-                    return models.map(\.id)
+                    return try await ProviderModelCatalog.fetchVercelAIGatewayModelIDs(apiKey: apiKey)
                 default:
                     return try await ProviderModelCatalog.fetchOpenAIModelIDs(apiKey: apiKey)
                 }
