@@ -12,10 +12,6 @@ struct AIEnhancementOutputFilter {
             // A response that opens with reasoning and never closes it (cut off) has
             // no answer. Anchored to the start so a dictated mention of a tag survives.
             processedText = replacing(#"(?s)\A\s*<\#(tag)>.*\z"#, in: processedText)
-            // Some chat templates put the opening tag in the prompt, so the reply carries
-            // only the closing one: "…reasoning…</think>answer". Drop everything up to a
-            // closing tag that no opening tag comes before.
-            processedText = replacing(#"(?s)\A(?:(?!<\#(tag)>).)*?</\#(tag)>"#, in: processedText)
         }
 
         return processedText.trimmingCharacters(in: .whitespacesAndNewlines)

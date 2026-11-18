@@ -11,12 +11,11 @@ import Foundation
 /// Reasoning comes back in `reasoning_content` or `reasoning`, which LLMkit doesn't read, and
 /// `AIEnhancementOutputFilter` drops any `<think>` block left in `content`.
 ///
-/// Every table entry was measured live on 2026-11-18 with VoiceInk's Default prompt and a
-/// 106-word dictation. A model that isn't listed (one the host added later) gets Default only:
-/// no reasoning parameter and no levels, like an unknown Groq model.
+/// The tables were measured live on 2026-11-18 with VoiceInk's Default prompt and a 106-word
+/// dictation. A model that isn't listed gets Default only: no reasoning parameter and no
+/// levels, like an unknown Groq model. That covers models measured that way and ones a host
+/// adds later.
 enum HostedModelProviders {
-    static let providers: Set<AIProvider> = [.togetherAI, .gmiCloud, .baseten, .fireworks, .vercelAIGateway]
-
     static func apiKeyURL(for provider: AIProvider) -> URL? {
         switch provider {
         case .togetherAI: return URL(string: "https://api.together.ai/settings/api-keys")
@@ -73,11 +72,12 @@ enum HostedModelProviders {
         case .gmiCloud:
             return gmiCloudUnusableModels.contains(id)
         case .baseten:
-            return basetenUnusableModels.contains(id) || id.hasPrefix("decision-models/")
+            // Baseten's `decision-models/*` are classifiers, not chat models.
+            return id.hasPrefix("decision-models/")
         case .fireworks:
             return fireworksUnusableModels.contains(id)
         case .vercelAIGateway:
-            return vercelAIGatewayUnusableTokens.contains { id.contains($0) }
+            return vercelAIGatewayUnusableModels.contains(id)
         default:
             return false
         }
@@ -102,11 +102,5 @@ enum HostedModelProviders {
     /// The `reasoning_effort` Default sends, or `nil` for none.
     static func defaultEffort(for provider: AIProvider, modelName: String) -> String? {
         reasoning(for: provider, modelName: modelName)?.defaultEffort
-    }
-}
-
-extension ProviderModelCatalog {
-    static func isUnusableHostedModel(_ modelName: String, for provider: AIProvider) -> Bool {
-        HostedModelProviders.isUnusable(modelName, for: provider)
     }
 }

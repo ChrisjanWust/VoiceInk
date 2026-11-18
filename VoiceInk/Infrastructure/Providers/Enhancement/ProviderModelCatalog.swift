@@ -469,7 +469,7 @@ enum ProviderModelCatalog {
             .filter { model in
                 model.type == "chat"
                     && isOpenAICompatibleChatModel(model.id)
-                    && !isUnusableHostedModel(model.id, for: .togetherAI)
+                    && !HostedModelProviders.isUnusable(model.id, for: .togetherAI)
             }
             .sorted { lhs, rhs in
                 if lhs.created != rhs.created { return (lhs.created ?? 0) > (rhs.created ?? 0) }
@@ -500,7 +500,7 @@ enum ProviderModelCatalog {
     /// shared exclusions apply, plus the models that failed VoiceInk's request.
     private static func gmiCloudEnhancementModelIDs(_ models: [OpenAICompatibleModel]) -> [String] {
         models
-            .filter { isOpenAICompatibleChatModel($0.id) && !isUnusableHostedModel($0.id, for: .gmiCloud) }
+            .filter { isOpenAICompatibleChatModel($0.id) && !HostedModelProviders.isUnusable($0.id, for: .gmiCloud) }
             .sortedNewestFirst()
     }
 
@@ -524,7 +524,7 @@ enum ProviderModelCatalog {
                 (model.inputModalities ?? ["text"]).contains("text")
                     && (model.outputModalities ?? ["text"]) == ["text"]
                     && isOpenAICompatibleChatModel(model.id)
-                    && !isUnusableHostedModel(model.id, for: .baseten)
+                    && !HostedModelProviders.isUnusable(model.id, for: .baseten)
             }
             .sorted { lhs, rhs in
                 if lhs.created != rhs.created { return (lhs.created ?? 0) > (rhs.created ?? 0) }
@@ -554,7 +554,7 @@ enum ProviderModelCatalog {
                 model.supportsChat == true
                     && model.kind != "EMBEDDING_MODEL"
                     && isOpenAICompatibleChatModel(model.id)
-                    && !isUnusableHostedModel(model.id, for: .fireworks)
+                    && !HostedModelProviders.isUnusable(model.id, for: .fireworks)
             }
             .sorted { lhs, rhs in
                 if lhs.created != rhs.created { return (lhs.created ?? 0) > (rhs.created ?? 0) }
@@ -589,7 +589,7 @@ enum ProviderModelCatalog {
                     && !model.id.lowercased().hasSuffix("-batch")
                     && !GeminiModelMigration.isUnsupported(model.id)
                     && isOpenAICompatibleChatModel(model.id)
-                    && !isUnusableHostedModel(model.id, for: .vercelAIGateway)
+                    && !HostedModelProviders.isUnusable(model.id, for: .vercelAIGateway)
             }
             .sorted { lhs, rhs in
                 let lhsOwner = lhs.id.split(separator: "/").first.map(String.init) ?? lhs.id
