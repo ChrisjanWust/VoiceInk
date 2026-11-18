@@ -15,12 +15,14 @@ enum OllamaThink: Equatable, Sendable {
 }
 
 /// One Ollama `/api/generate` request. Optional fields are left out of the body when `nil`.
-struct OllamaGenerateRequest: Sendable {
+struct OllamaGenerateRequest {
     var model: String
     var prompt: String
     var system: String
     var temperature: Double?
     var think: OllamaThink?
+    /// Extra top-level body fields, merged last so they win.
+    var extraBody: [String: Any] = [:]
 
     var jsonBody: [String: Any] {
         var body: [String: Any] = [
@@ -32,6 +34,7 @@ struct OllamaGenerateRequest: Sendable {
         // Same as LLMkit: `options` is only sent when it has a value.
         if let temperature { body["options"] = ["temperature": temperature] }
         if let think { body["think"] = think.jsonValue }
+        body.merge(extraBody) { _, extra in extra }
         return body
     }
 }
