@@ -336,9 +336,12 @@ enum ProviderModelCatalog {
     // Models that always reason return `message.content` as a list of thinking and text
     // chunks, whatever `reasoning_effort` says, and LLMkit only reads a plain string. The
     // `reasoning` capability is also set on hybrid models that answer in plain text by
-    // default, so these are matched by ID. See
+    // default, so these are matched by ID. Mistral Large 4 "always reasons" and defaults
+    // to `high`; `mistral-large-latest` points to it. See
     // https://docs.mistral.ai/inference/conversations/reasoning
-    private static let mistralAlwaysReasoningTokens = ["zai-glm", "magistral"]
+    private static let mistralAlwaysReasoningTokens = [
+        "zai-glm", "magistral", "mistral-large-4", "mistral-large-latest",
+    ]
 
     private static func isMistralEnhancementModel(_ model: MistralModel) -> Bool {
         guard let capabilities = model.capabilities, capabilities.completionChat == true else { return false }
