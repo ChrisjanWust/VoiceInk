@@ -18,6 +18,7 @@ enum CerebrasModelMigration {
         "qwen-3-coder-480b",
         "llama-3.3-70b",
         "llama3.1-8b",
+        "llama-3.1-8b",
         "llama-4-scout-17b-16e-instruct",
         "llama-4-maverick-17b-128e-instruct",
     ]
