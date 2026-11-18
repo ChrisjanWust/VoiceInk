@@ -27,6 +27,7 @@ enum ProviderModelCatalog {
     static let openAIModelsEndpoint = URL(string: "https://api.openai.com/v1/models")!
     // v1beta lists preview models too; the stable v1 list omits them.
     static let geminiModelsEndpoint = URL(string: "https://generativelanguage.googleapis.com/v1beta/models")!
+    static let geminiStableModelsEndpoint = URL(string: "https://generativelanguage.googleapis.com/v1/models")!
 
     // MARK: - OpenAI
 
@@ -82,16 +83,34 @@ enum ProviderModelCatalog {
 
     // MARK: - Gemini
 
-    /// Fetches the Gemini models list (all pages) and returns the text models usable through
-    /// the Interactions API, newest first.
+    /// Fetches the Gemini models lists and returns the text models usable through the
+    /// Interactions API, newest first.
+    ///
+    /// LLMkit sends `-preview` models to `/v1beta/interactions` and everything else to
+    /// `/v1/interactions`, and each endpoint only accepts models from its own version's list
+    /// (others return 404). So a model is usable when the v1 list has it, or when it is a
+    /// `-preview` model on the v1beta list.
     static func fetchGeminiModelIDs(apiKey: String, timeout: TimeInterval = 15) async throws -> [String] {
         let trimmedKey = try validatedKey(apiKey)
+        async let stable = fetchGeminiModels(endpoint: geminiStableModelsEndpoint, apiKey: trimmedKey, timeout: timeout)
+        async let beta = fetchGeminiModels(endpoint: geminiModelsEndpoint, apiKey: trimmedKey, timeout: timeout)
+
+        let ids = try await geminiEnhancementModelIDs(stable: stable, beta: beta)
+        guard !ids.isEmpty else { throw CatalogError.noUsableModels }
+        return ids
+    }
+
+    private static func fetchGeminiModels(
+        endpoint: URL,
+        apiKey: String,
+        timeout: TimeInterval
+    ) async throws -> [GeminiModel] {
         var models: [GeminiModel] = []
         var pageToken: String?
 
         // models.list is paginated; ten pages of 1000 is far beyond the current catalog.
         for _ in 0..<10 {
-            var components = URLComponents(url: geminiModelsEndpoint, resolvingAgainstBaseURL: false)!
+            var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
             var queryItems = [URLQueryItem(name: "pageSize", value: "1000")]
             if let pageToken {
                 queryItems.append(URLQueryItem(name: "pageToken", value: pageToken))
@@ -99,60 +118,65 @@ enum ProviderModelCatalog {
             components.queryItems = queryItems
 
             var request = URLRequest(url: components.url!)
-            request.setValue(trimmedKey, forHTTPHeaderField: "x-goog-api-key")
+            request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
 
-            let data = try await perform(request, timeout: timeout)
-            let page: GeminiModelList
-            do {
-                page = try JSONDecoder().decode(GeminiModelList.self, from: data)
-            } catch {
-                throw CatalogError.invalidResponse
-            }
-
+            let page = try decodeGeminiModelList(try await perform(request, timeout: timeout))
             models.append(contentsOf: page.models ?? [])
             guard let next = page.nextPageToken, !next.isEmpty else { break }
             pageToken = next
         }
-
-        let ids = geminiEnhancementModelIDs(from: models)
-        guard !ids.isEmpty else { throw CatalogError.noUsableModels }
-        return ids
+        return models
     }
 
-    static func geminiEnhancementModelIDs(from data: Data) throws -> [String] {
+    /// Filters one page each of the v1 and v1beta models lists.
+    static func geminiEnhancementModelIDs(stableData: Data, betaData: Data) throws -> [String] {
+        try geminiEnhancementModelIDs(
+            stable: decodeGeminiModelList(stableData).models ?? [],
+            beta: decodeGeminiModelList(betaData).models ?? []
+        )
+    }
+
+    private static func decodeGeminiModelList(_ data: Data) throws -> GeminiModelList {
         do {
-            let page = try JSONDecoder().decode(GeminiModelList.self, from: data)
-            return geminiEnhancementModelIDs(from: page.models ?? [])
+            return try JSONDecoder().decode(GeminiModelList.self, from: data)
         } catch {
             throw CatalogError.invalidResponse
         }
     }
 
-    private static func geminiEnhancementModelIDs(from models: [GeminiModel]) -> [String] {
-        models
-            .filter { model in
-                (model.supportedGenerationMethods ?? []).contains("generateContent")
-            }
-            .map { model in
-                model.name.hasPrefix("models/") ? String(model.name.dropFirst("models/".count)) : model.name
-            }
+    private static func geminiEnhancementModelIDs(stable: [GeminiModel], beta: [GeminiModel]) -> [String] {
+        func generateContentIDs(_ models: [GeminiModel]) -> [String] {
+            models
+                .filter { ($0.supportedGenerationMethods ?? []).contains("generateContent") }
+                .map { $0.name.hasPrefix("models/") ? String($0.name.dropFirst("models/".count)) : $0.name }
+        }
+
+        let previewIDs = generateContentIDs(beta).filter { $0.lowercased().contains("-preview") }
+        return (generateContentIDs(stable) + previewIDs)
             .filter(isGeminiEnhancementModel)
-            .sorted { $0.localizedStandardCompare($1) == .orderedDescending }
+            .sorted { lhs, rhs in
+                // Gemini before Gemma, then newest first.
+                let lhsIsGemma = lhs.lowercased().hasPrefix("gemma-")
+                let rhsIsGemma = rhs.lowercased().hasPrefix("gemma-")
+                if lhsIsGemma != rhsIsGemma { return rhsIsGemma }
+                return lhs.localizedStandardCompare(rhs) == .orderedDescending
+            }
             .uniqued()
     }
 
-    // The Interactions API accepts the mainline Gemini text models plus image, TTS, music and
-    // agent models (https://aistudio.google.com/docs/interactions). Keep only text models.
+    // Both lists also carry image, TTS, music, video, robotics, agent and Live models, many of
+    // which accept a text request but aren't text models. Keep only text models.
     private static let geminiExcludedTokens = [
         "embedding", "tts", "image", "imagen", "nano-banana", "veo", "omni", "lyria", "live",
         "audio", "transcribe", "robotics", "computer-use", "deep-research", "antigravity",
-        "decision", "aqa", "learnlm", "exp",
+        "decision", "aqa", "learnlm", "customtools", "exp",
     ]
 
     static func isGeminiEnhancementModel(_ id: String) -> Bool {
         let lowercased = id.lowercased()
-        guard lowercased.hasPrefix("gemini-") else { return false }
-        // Moving aliases such as `gemini-flash-latest` aren't listed for the Interactions API.
+        guard lowercased.hasPrefix("gemini-") || lowercased.hasPrefix("gemma-") else { return false }
+        // Moving aliases such as `gemini-flash-latest` are v1beta-only without a `-preview`
+        // suffix, so LLMkit would send them to v1, which returns 404.
         if lowercased.hasSuffix("-latest") { return false }
         if geminiExcludedTokens.contains(where: { lowercased.contains($0) }) { return false }
         if hasDatedSuffix(lowercased) { return false }
@@ -187,10 +211,19 @@ enum ProviderModelCatalog {
         guard (200..<300).contains(http.statusCode) else {
             throw CatalogError.httpError(
                 statusCode: http.statusCode,
-                message: String(data: data, encoding: .utf8) ?? ""
+                message: apiErrorMessage(from: data) ?? String(data: data, encoding: .utf8) ?? ""
             )
         }
         return data
+    }
+
+    /// Both providers wrap failures as `{"error": {"message": "..."}}`.
+    private static func apiErrorMessage(from data: Data) -> String? {
+        struct ErrorBody: Decodable {
+            struct Detail: Decodable { let message: String? }
+            let error: Detail?
+        }
+        return (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error?.message
     }
 }
 
