@@ -142,7 +142,53 @@ enum BedrockModelCatalog {
         "writer.palmyra-vision-7b",
         // Gated: "not available for this account", with access through AWS Sales.
         "zai.glm-5.3",
+        // Too slow for dictation at Default: 46 s median, 58 s max (the ~45 s median rule in
+        // `ReasoningConfig.tooSlowLevels`).
+        "moonshot.kimi-k2-thinking",
     ]
+
+    /// Minimum request timeouts for listed models that usually took longer than the default
+    /// 7 s at Default in live tests on 2026-11-18. Each is the measured max with headroom
+    /// (Grok 4.6: 38 s, Grok 4.7: 14 s, Claude Fable 5.2: 9 s). Keyed by foundation model ID
+    /// so every inference profile for the model is covered, including typed ones.
+    static let minimumTimeouts: [String: TimeInterval] = [
+        "xai.grok-4.6": 60,
+        "xai.grok-4.7": 30,
+        "anthropic.claude-fable-5-2": 30,
+    ]
+
+    static func minimumTimeout(forModel modelID: String) -> TimeInterval? {
+        minimumTimeouts[foundationModelID(for: modelID)]
+    }
+
+    /// `global.xai.grok-4.7` -> `xai.grok-4.7`; base model IDs are returned unchanged.
+    static func foundationModelID(for modelID: String) -> String {
+        let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard BedrockErrorDescriber.isInferenceProfileID(trimmed),
+            let dot = trimmed.firstIndex(of: ".")
+        else {
+            return trimmed
+        }
+        return String(trimmed[trimmed.index(after: dot)...])
+    }
+
+    /// How long a request to this model may take with the current timeout settings, for models
+    /// with a minimum timeout. `nil` for models that answer within the configured timeout.
+    static func slowModelCaption(for modelID: String) -> String? {
+        guard let minimum = minimumTimeout(forModel: modelID) else { return nil }
+        let timeout = ReasoningConfig.requestTimeout(
+            EnhancementRequestSettings.timeout,
+            retryOnTimeout: EnhancementRequestSettings.retryOnTimeout,
+            level: nil
+        )
+        .raised(toAtLeast: minimum)
+        // A timeout retry makes up to three attempts.
+        let seconds = Int(timeout.seconds) * (timeout.retryOnTimeout ? 3 : 1)
+        return String(
+            format: String(localized: "This model is slower. Enhancement may take up to %d seconds."),
+            seconds
+        )
+    }
 
     /// On-demand models are called by their base ID. Models that only run through an
     /// inference profile use a system-defined profile in this Region that routes to them,
@@ -466,5 +512,14 @@ extension BedrockModelCatalog {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .aiProviderKeyChanged, object: nil)
         }
+    }
+}
+
+extension ReasoningConfig.RequestTimeout {
+    /// Applies a minimum timeout the way a reasoning level's floor does: a larger timeout wins,
+    /// and a raised timeout turns off the retry, which would triple the wait.
+    func raised(toAtLeast minimum: TimeInterval?) -> ReasoningConfig.RequestTimeout {
+        guard let minimum, minimum > seconds else { return self }
+        return ReasoningConfig.RequestTimeout(seconds: minimum, retryOnTimeout: false)
     }
 }

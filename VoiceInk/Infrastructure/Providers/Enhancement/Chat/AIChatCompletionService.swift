@@ -31,6 +31,7 @@ extension AIService {
                 modelInfo: reasoningModelInfo(for: provider, model: resolvedModel)
             )
         )
+        .raised(toAtLeast: provider == .bedrock ? BedrockModelCatalog.minimumTimeout(forModel: resolvedModel) : nil)
 
         let result: String
         var openRouterCompletion: OpenRouterCompletion? = nil
