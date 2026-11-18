@@ -236,10 +236,10 @@ class AIEnhancementService: ObservableObject {
                 timeout: requestTimeout,
                 retryOnTimeout: EnhancementRequestSettings.retryOnTimeout
             )
-            if let openRouterCompletion = completion.openRouterCompletion {
-                let routedProvider = openRouterCompletion.provider ?? "unknown"
-                let routingAttempt = openRouterCompletion.metadata?.attempt ?? 0
-                let reasoningTokens = openRouterCompletion.usage?.reasoningTokens ?? 0
+            if let openRouterResult = completion.openRouterResult {
+                let routedProvider = openRouterResult.provider ?? "unknown"
+                let routingAttempt = openRouterResult.metadata?["attempt"]?.intValue ?? 0
+                let reasoningTokens = openRouterResult.usage?.reasoningTokens ?? 0
                 logger.debug(
                     "OpenRouter completed requestedModel=\(modelName, privacy: .public) routedProvider=\(routedProvider, privacy: .public) routingAttempt=\(routingAttempt, privacy: .public) reasoningTokens=\(reasoningTokens, privacy: .public)"
                 )

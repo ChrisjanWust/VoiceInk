@@ -4,7 +4,8 @@ import VoiceInkChat
 
 struct AIChatCompletionResult: Sendable {
     let text: String
-    let openRouterCompletion: OpenRouterCompletion?
+    /// The full result for OpenRouter, which says which upstream provider served it.
+    let openRouterResult: ChatResult?
 }
 
 extension AIService {
@@ -62,7 +63,7 @@ extension AIService {
                 retryOnTimeout: requestTimeout.retryOnTimeout
             )
             guard !completion.wasTruncated else { throw EnhancementError.outputTruncated }
-            return AIChatCompletionResult(text: completion.text, openRouterCompletion: nil)
+            return AIChatCompletionResult(text: completion.text, openRouterResult: nil)
         }
 
         var request = ChatRequest(
@@ -76,7 +77,6 @@ extension AIService {
 
         // Groups not yet on VoiceInkChat return from their case.
         let result: String
-        var openRouterCompletion: OpenRouterCompletion? = nil
         switch provider {
         case .gemini:
             request.reasoning = ReasoningConfig.geminiThinkingLevel(for: resolvedModel, level: reasoningLevel)
@@ -113,33 +113,24 @@ extension AIService {
                     retryOnTimeout: requestTimeout.retryOnTimeout
                 )
             }
-            return AIChatCompletionResult(text: result, openRouterCompletion: openRouterCompletion)
+            return AIChatCompletionResult(text: result, openRouterResult: nil)
         case .openRouter:
             let policy = OpenRouterRequestPolicy.lowLatency(
                 modelName: resolvedModel,
                 modelMetadata: openRouterModelMetadata(for: resolvedModel),
                 reasoningLevel: reasoningLevel
             )
-            let completion = try await OpenRouterClient.chatCompletion(
-                apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                model: policy.model,
-                messages: llmkitMessages,
-                systemPrompt: systemPrompt,
-                temperature: policy.temperature,
-                reasoning: policy.reasoning,
-                provider: policy.provider,
-                includeRouterMetadata: true,
-                appReferer: URL(string: "https://tryvoiceink.com"),
-                appTitle: "VoiceInk",
-                timeout: requestTimeout.seconds,
-                retryOnTimeout: requestTimeout.retryOnTimeout
+            request.model = policy.model
+            request.temperature = policy.temperature
+            request.reasoning = policy.reasoning
+            client = RoutedOpenRouterClient(
+                client: OpenRouterChatClient(
+                    apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                    appReferer: URL(string: "https://tryvoiceink.com"),
+                    appTitle: "VoiceInk"
+                ),
+                preferences: policy.provider
             )
-            guard !OpenRouterRequestPolicy.outputWasTruncated(finishReason: completion.finishReason) else {
-                throw EnhancementError.outputTruncated
-            }
-            result = completion.text
-            openRouterCompletion = completion
-            return AIChatCompletionResult(text: result, openRouterCompletion: openRouterCompletion)
         case .bedrock:
             result = try await bedrockChatCompletion(
                 apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
@@ -153,7 +144,7 @@ extension AIService {
                 timeout: requestTimeout.seconds,
                 retryOnTimeout: requestTimeout.retryOnTimeout
             )
-            return AIChatCompletionResult(text: result, openRouterCompletion: openRouterCompletion)
+            return AIChatCompletionResult(text: result, openRouterResult: nil)
         case .custom:
             guard
                 let customConfiguration = CustomAIProviderManager.shared.requestConfiguration(forModel: resolvedModel),
@@ -187,13 +178,13 @@ extension AIService {
                 timeout: requestTimeout.seconds,
                 retryOnTimeout: requestTimeout.retryOnTimeout
             )
-            return AIChatCompletionResult(text: result, openRouterCompletion: openRouterCompletion)
+            return AIChatCompletionResult(text: result, openRouterResult: nil)
         case .localCLI:
             result = try await enhanceWithLocalCLI(
                 systemPrompt: systemPrompt ?? "",
                 userPrompt: localUserPrompt ?? chatPrompt(from: llmkitMessages)
             )
-            return AIChatCompletionResult(text: result, openRouterCompletion: openRouterCompletion)
+            return AIChatCompletionResult(text: result, openRouterResult: nil)
         default:
             guard let chatProvider = provider.openAICompatibleChatProvider else {
                 throw EnhancementError.notConfigured
@@ -215,7 +206,7 @@ extension AIService {
         request.extraBody.merge(fastMode?.bodyFields ?? [:]) { _, fast in fast }
         let completion = try await client.complete(request)
         try Self.requireFinishedAnswer(completion)
-        return AIChatCompletionResult(text: completion.text, openRouterCompletion: nil)
+        return AIChatCompletionResult(text: completion.text, openRouterResult: provider == .openRouter ? completion : nil)
     }
 
     /// Only a finished answer is used. A cut-off, filtered or failed one throws, so it's never
@@ -365,6 +356,16 @@ extension AIService {
             \(formattedMessages)
             </conversation>
             """
+    }
+}
+
+/// OpenRouter with VoiceInk's routing preferences.
+private struct RoutedOpenRouterClient: ChatClient {
+    let client: OpenRouterChatClient
+    let preferences: OpenRouterChatClient.ProviderPreferences
+
+    func complete(_ request: ChatRequest) async throws -> ChatResult {
+        try await client.complete(request, providerPreferences: preferences)
     }
 }
 
