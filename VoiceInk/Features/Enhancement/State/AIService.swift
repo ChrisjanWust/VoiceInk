@@ -847,6 +847,11 @@ class AIService: ObservableObject {
         openRouterModelCatalog.first(where: { $0.id == modelName })
     }
 
+    /// Makes sure a saved Ollama level can be checked against the model's named levels.
+    func loadOllamaThinkingMetadataIfNeeded(for model: String) async {
+        await ollamaService.loadThinkingMetadataIfNeeded(for: model)
+    }
+
     func reasoningModelInfo(for provider: AIProvider, model: String) -> ReasoningModelInfo {
         switch provider {
         case .openRouter:

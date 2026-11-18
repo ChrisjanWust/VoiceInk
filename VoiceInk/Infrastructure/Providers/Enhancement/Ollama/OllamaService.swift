@@ -114,20 +114,7 @@ class OllamaService: ObservableObject {
         await withTaskGroup(of: (String, [String]?).self) { group in
             for model in models {
                 group.addTask {
-                    var request = URLRequest(url: baseURL.appendingPathComponent("api/show"))
-                    request.httpMethod = "POST"
-                    request.timeoutInterval = 10
-                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": model])
-
-                    guard let (data, response) = try? await URLSession.shared.data(for: request),
-                        let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-                        let decoded = try? JSONDecoder().decode(OllamaShowResponse.self, from: data)
-                    else {
-                        return (model, nil)
-                    }
-                    // Booleans in `values` are an on/off switch; strings are named levels.
-                    return (model, decoded.thinking?.values.compactMap(\.level) ?? [])
+                    (model, await Self.fetchShow(baseURL: baseURL, model: model)?.thinkingLevels)
                 }
             }
 
@@ -139,6 +126,37 @@ class OllamaService: ObservableObject {
             }
             return levels
         }
+    }
+
+    /// Loads one model's thinking metadata if this instance doesn't have it yet. A service
+    /// that never refreshes its model list (the Auto-Learn reviewer has its own `AIService`)
+    /// would otherwise treat a saved named level as unsupported and send Default.
+    @MainActor
+    func loadThinkingMetadataIfNeeded(for model: String) async {
+        guard thinkingLevels[model] == nil, let url = baseURLValue,
+            let show = await Self.fetchShow(baseURL: url, model: model)
+        else {
+            return
+        }
+        if let capabilities = show.capabilities {
+            thinkingSupport[model] = capabilities.contains("thinking")
+        }
+        thinkingLevels[model] = show.thinkingLevels
+    }
+
+    private static func fetchShow(baseURL: URL, model: String) async -> OllamaShowResponse? {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/show"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": model])
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+            let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode)
+        else {
+            return nil
+        }
+        return try? JSONDecoder().decode(OllamaShowResponse.self, from: data)
     }
 
     func enhance(
@@ -252,7 +270,13 @@ private struct OllamaShowResponse: Decodable {
         }
     }
 
+    let capabilities: [String]?
     let thinking: Thinking?
+
+    /// Named levels only. Booleans in `values` are an on/off switch.
+    var thinkingLevels: [String] {
+        thinking?.values.compactMap(\.level) ?? []
+    }
 }
 
 // MARK: - Error Types

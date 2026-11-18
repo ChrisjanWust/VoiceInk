@@ -21,6 +21,10 @@ extension AIService {
             for: provider
         )
         let reasoningLevel = EnhancementReasoningSettings.savedLevel(for: provider, model: resolvedModel)
+        if provider == .ollama, reasoningLevel != nil {
+            // Only when a level is saved, so Default requests do no extra work.
+            await loadOllamaThinkingMetadataIfNeeded(for: resolvedModel)
+        }
         let fastMode = FastModeConfig.parameters(
             for: provider,
             modelName: resolvedModel,
