@@ -369,6 +369,7 @@ class AIService: ObservableObject {
             }
         }
 
+        CerebrasModelMigration.migrateSavedSelection(in: userDefaults)
         loadSavedModelSelections()
         loadSavedOpenRouterModels()
 
@@ -599,6 +600,12 @@ class AIService: ObservableObject {
             result = await OpenAILLMClient.verifyAPIKey(key)
         case .gemini:
             result = await GeminiLLMClient.verifyAPIKey(key)
+        case .cerebras:
+            // GET /v1/models checks the key without depending on a model ID.
+            result = await OpenAITranscriptionClient.verifyAPIKey(
+                baseURL: URL(string: "https://api.cerebras.ai")!,
+                apiKey: key
+            )
         default:
             guard let baseURL = URL(string: provider.baseURL) else {
                 return (false, "Invalid or missing base URL configuration")
