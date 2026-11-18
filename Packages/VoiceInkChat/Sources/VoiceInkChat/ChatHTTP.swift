@@ -199,12 +199,14 @@ final class SessionHolder: @unchecked Sendable {
 
     var current: URLSession { lock.withLock { session } }
 
-    /// Replaces `stale` with a new session, unless another request already has. Requests still
-    /// running on the old session finish normally.
+    /// Replaces `stale` with a new session, unless another request already has.
+    ///
+    /// The old session isn't invalidated: another request may have just read it and not yet
+    /// started its task, and starting a task on an invalidated session raises an uncatchable
+    /// exception. With no delegate, the old session is released once its requests finish.
     func replace(_ stale: URLSession) {
         lock.withLock {
             guard session === stale else { return }
-            stale.finishTasksAndInvalidate()
             session = Self.makeSession(makeConfiguration())
         }
     }
