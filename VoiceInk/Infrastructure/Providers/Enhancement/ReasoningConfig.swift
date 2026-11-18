@@ -402,11 +402,15 @@ struct ReasoningConfig {
             .filter { !tooSlow.contains($0) }
     }
 
-    // Levels too slow for dictation in live measurements on 2026-11-17 (median above
-    // ~45 s or max above ~120 s), so they aren't offered for these models.
+    // Levels too slow for dictation in live measurements (median above ~45 s or max above
+    // ~120 s), so they aren't offered for these models. OpenAI and Gemini were measured on
+    // 2026-11-17; Anthropic and Ollama on 2026-11-18. Ollama runs locally, so its numbers
+    // come from one Mac (gpt-oss:20b High: 24-150 s, two runs timed out).
     static let tooSlowLevels: [AIProvider: [String: Set<ReasoningLevel>]] = [
         .openAI: ["gpt-5.4": [.xhigh], "gpt-5.4-mini": [.xhigh]],
         .gemini: ["gemini-4-carbon": [.high], "gemini-4-argon": [.high]],
+        .anthropic: ["claude-sonnet-5": [.max]],
+        .ollama: ["gpt-oss:20b": [.high], "gpt-oss:latest": [.high], "gpt-oss": [.high]],
     ]
 
     private static func providerLevels(
