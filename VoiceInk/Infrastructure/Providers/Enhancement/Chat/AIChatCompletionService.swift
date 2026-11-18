@@ -37,12 +37,11 @@ extension AIService {
         {
             // Mistral returns reasoning as chunked `content`, which LLMkit can't decode, so a
             // picked level uses the in-app client. Default stays on the LLMkit path below.
-            let completion = try await MistralReasoningClient.chatCompletion(
+            var request = MistralChatRequest(model: resolvedModel, messages: messages, systemPrompt: systemPrompt)
+            request.reasoningEffort = reasoningEffort
+            let completion = try await MistralChatClient.chatCompletion(
                 apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
-                model: resolvedModel,
-                messages: messages,
-                systemPrompt: systemPrompt,
-                reasoningEffort: reasoningEffort,
+                request: request,
                 timeout: requestTimeout.seconds,
                 retryOnTimeout: requestTimeout.retryOnTimeout
             )
@@ -68,12 +67,15 @@ extension AIService {
             if let reasoning = ReasoningConfig.anthropicReasoning(for: resolvedModel, level: reasoningLevel) {
                 // LLMkit can't send `thinking` or `output_config`, so a picked level uses the
                 // in-app client. Default stays on LLMkit, unchanged.
-                let completion = try await AnthropicMessagesClient.createMessage(
-                    apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                var request = AnthropicMessagesRequest(
                     model: resolvedModel,
                     messages: messages,
-                    systemPrompt: systemPrompt,
-                    reasoning: reasoning,
+                    systemPrompt: systemPrompt
+                )
+                reasoning.apply(to: &request)
+                let completion = try await AnthropicMessagesClient.createMessage(
+                    apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
+                    request: request,
                     timeout: requestTimeout.seconds,
                     retryOnTimeout: requestTimeout.retryOnTimeout
                 )

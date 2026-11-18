@@ -777,7 +777,7 @@ class AIService: ObservableObject {
         text: String,
         systemPrompt: String,
         model: String? = nil,
-        think: ReasoningConfig.OllamaThink = .enabled(false),
+        think: OllamaThink = .enabled(false),
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> String {

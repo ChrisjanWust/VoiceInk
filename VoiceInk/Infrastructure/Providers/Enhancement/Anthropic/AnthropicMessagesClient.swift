@@ -1,44 +1,80 @@
 import Foundation
 import LLMkit
 
-/// The reasoning part of an Anthropic Messages request, for a level the user picked.
-struct AnthropicReasoningRequest: Equatable, Sendable {
-    enum Thinking: Equatable, Sendable {
-        /// `{"type": "adaptive", "display": "omitted"}`: Claude decides how much to think, and
-        /// thinking blocks come back without text.
-        case adaptive
-        /// `{"type": "enabled", "budget_tokens": N}`, for models that only have extended thinking.
-        case budget(Int)
-        /// `{"type": "disabled"}`.
-        case disabled
-        /// `{"type": "between_tools"}`: Claude Sonnet 5.5's way to skip up-front thinking.
-        case betweenTools
+/// The `thinking` field of an Anthropic Messages request.
+enum AnthropicThinking: Equatable, Sendable {
+    /// How thinking blocks come back: with summary text, or with an empty `thinking` field.
+    enum Display: String, Sendable {
+        case summarized
+        case omitted
     }
 
-    var thinking: Thinking?
-    /// `output_config.effort`.
-    var effort: String?
-    var maxTokens: Int
+    /// `{"type": "adaptive"}`: Claude decides whether and how much to think.
+    case adaptive(display: Display? = nil)
+    /// `{"type": "enabled", "budget_tokens": N}`: extended thinking with a fixed budget.
+    case enabled(budgetTokens: Int, display: Display? = nil)
+    /// `{"type": "disabled"}`.
+    case disabled
+    /// `{"type": "between_tools"}`: no up-front thinking (Claude Sonnet 5.5).
+    case betweenTools
 
-    /// The fields this adds to the request body.
-    var bodyFields: [String: Any] {
-        var fields: [String: Any] = ["max_tokens": maxTokens]
-        switch thinking {
-        case .adaptive:
-            fields["thinking"] = ["type": "adaptive", "display": "omitted"]
-        case .budget(let tokens):
-            fields["thinking"] = ["type": "enabled", "budget_tokens": tokens, "display": "omitted"]
+    var jsonValue: [String: Any] {
+        switch self {
+        case .adaptive(let display):
+            return ["type": "adaptive"].withDisplay(display)
+        case .enabled(let budgetTokens, let display):
+            return ["type": "enabled", "budget_tokens": budgetTokens].withDisplay(display)
         case .disabled:
-            fields["thinking"] = ["type": "disabled"]
+            return ["type": "disabled"]
         case .betweenTools:
-            fields["thinking"] = ["type": "between_tools"]
-        case nil:
-            break
+            return ["type": "between_tools"]
         }
-        if let effort {
-            fields["output_config"] = ["effort": effort]
-        }
-        return fields
+    }
+}
+
+extension Dictionary where Key == String, Value == Any {
+    fileprivate func withDisplay(_ display: AnthropicThinking.Display?) -> [String: Any] {
+        guard let display else { return self }
+        var copy = self
+        copy["display"] = display.rawValue
+        return copy
+    }
+}
+
+/// One Anthropic Messages API request. Optional fields are left out of the body when `nil`.
+struct AnthropicMessagesRequest: Sendable {
+    var model: String
+    var system: String?
+    /// User and assistant turns, in order.
+    var messages: [ChatMessage]
+    /// LLMkit's default.
+    var maxTokens: Int = 8192
+    var thinking: AnthropicThinking?
+    /// `output_config.effort`, such as `"low"` or `"max"`.
+    var effort: String?
+    /// Claude 5 models reject any non-default sampling parameter, so leave this `nil` for them.
+    var temperature: Double?
+
+    /// Builds a request the way LLMkit's `AnthropicLLMClient` does: an explicit system prompt
+    /// wins, otherwise system messages are joined, and they're removed from `messages`.
+    init(model: String, messages: [ChatMessage], systemPrompt: String?) {
+        self.model = model
+        let systemMessages = messages.filter { $0.role == "system" }.map(\.content)
+        self.system = systemPrompt ?? (systemMessages.isEmpty ? nil : systemMessages.joined(separator: "\n"))
+        self.messages = messages.filter { $0.role != "system" }
+    }
+
+    var jsonBody: [String: Any] {
+        var body: [String: Any] = [
+            "model": model,
+            "max_tokens": maxTokens,
+            "messages": messages.map { ["role": $0.role, "content": $0.content] },
+        ]
+        if let system { body["system"] = system }
+        if let thinking { body["thinking"] = thinking.jsonValue }
+        if let effort { body["output_config"] = ["effort": effort] }
+        if let temperature { body["temperature"] = temperature }
+        return body
     }
 }
 
@@ -52,75 +88,38 @@ struct AnthropicMessageResult: Equatable, Sendable {
     }
 }
 
-/// Minimal client for the Anthropic Messages API (`POST https://api.anthropic.com/v1/messages`),
-/// used when the user picks a reasoning level. Default requests still go through LLMkit's
-/// `AnthropicLLMClient`, which can't send `thinking` or `output_config`.
+/// Client for the Anthropic Messages API (`POST https://api.anthropic.com/v1/messages`).
 ///
-/// The request matches LLMkit's apart from the reasoning fields: same headers and API
-/// version, the same system prompt handling, and no sampling parameters (Claude 5 models
-/// reject non-default `temperature`, `top_p` and `top_k`).
+/// Sends LLMkit's headers and API version. VoiceInk uses it for requests LLMkit's
+/// `AnthropicLLMClient` can't make, such as ones with `thinking` or `output_config`.
 enum AnthropicMessagesClient {
     static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
     static let apiVersion = "2023-06-01"
 
     static func createMessage(
         apiKey: String,
-        model: String,
-        messages: [ChatMessage],
-        systemPrompt: String?,
-        reasoning: AnthropicReasoningRequest,
+        request: AnthropicMessagesRequest,
         timeout: TimeInterval,
         retryOnTimeout: Bool
     ) async throws -> AnthropicMessageResult {
-        let request = try makeRequest(
-            apiKey: apiKey,
-            model: model,
-            messages: messages,
-            systemPrompt: systemPrompt,
-            reasoning: reasoning
-        )
-        let data = try await ReasoningChatHTTP.send(request, timeout: timeout, retryOnTimeout: retryOnTimeout)
+        let urlRequest = try makeURLRequest(apiKey: apiKey, request: request)
+        let data = try await ChatHTTP.send(urlRequest, timeout: timeout, retryOnTimeout: retryOnTimeout)
         return try decodeResult(from: data)
     }
 
-    static func makeRequest(
-        apiKey: String,
-        model: String,
-        messages: [ChatMessage],
-        systemPrompt: String?,
-        reasoning: AnthropicReasoningRequest
-    ) throws -> URLRequest {
+    static func makeURLRequest(apiKey: String, request: AnthropicMessagesRequest) throws -> URLRequest {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw LLMKitError.missingAPIKey
         }
-
-        // Same as LLMkit: an explicit system prompt wins, otherwise system messages are joined.
-        let systemMessages = messages.filter { $0.role == "system" }.map(\.content)
-        let system = systemPrompt ?? (systemMessages.isEmpty ? nil : systemMessages.joined(separator: "\n"))
-
-        var body: [String: Any] = [
-            "model": model,
-            "messages": messages.filter { $0.role != "system" }.map { ["role": $0.role, "content": $0.content] },
-        ]
-        if let system {
-            body["system"] = system
-        }
-        body.merge(reasoning.bodyFields) { _, new in new }
-
-        return try ReasoningChatHTTP.jsonRequest(
+        return try ChatHTTP.jsonRequest(
             url: endpoint,
-            body: body,
+            body: request.jsonBody,
             headers: ["x-api-key": apiKey, "anthropic-version": apiVersion]
         )
     }
 
     static func decodeResult(from data: Data) throws -> AnthropicMessageResult {
-        let decoded: ResponseBody
-        do {
-            decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
-        } catch {
-            throw LLMKitError.decodingError(error.localizedDescription)
-        }
+        let decoded = try ChatHTTP.decode(ResponseBody.self, from: data)
         let text = decoded.content
             .filter { $0.type == "text" }
             .compactMap(\.text)

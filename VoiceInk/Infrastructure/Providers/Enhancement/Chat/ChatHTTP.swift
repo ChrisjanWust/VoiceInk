@@ -1,17 +1,49 @@
 import Foundation
 import LLMkit
 
-/// Sends the in-app reasoning requests (Anthropic, Mistral, Ollama levels) with the same
-/// timeout and retry rules as LLMkit's chat clients, and reports failures as `LLMKitError`
-/// so they're handled like the Default requests LLMkit sends.
+/// Shared HTTP transport for VoiceInk's in-app chat clients.
 ///
-/// LLMkit's own `performRequest` is internal to the package, so this mirrors it: up to
-/// three attempts, a 1 s then 2 s backoff for retryable statuses and network errors, and immediate
-/// retries for timeouts (including HTTP 408) only when `retryOnTimeout` is on.
-enum ReasoningChatHTTP {
-    /// LLMkit's chat retry codes: 429 and every 5xx.
+/// It sends a request with the same timeout and retry rules as LLMkit's chat clients and
+/// reports failures as `LLMKitError`, so callers handle them exactly like errors from LLMkit:
+/// - up to three attempts,
+/// - a 1 s then 2 s backoff for retryable statuses and network errors,
+/// - immediate retries for timeouts (including HTTP 408), only when `retryOnTimeout` is on,
+/// - `LLMKitError.httpError` with the response body for any other non-2xx status.
+///
+/// LLMkit's own `performRequest` is internal to the package, so this mirrors it.
+enum ChatHTTP {
+    /// LLMkit's chat retry statuses: 429 and every 5xx.
     static let chatRetryableStatusCodes: Set<Int> = Set([429]).union(500...599)
+    /// LLMkit's default retry statuses, which its Ollama client uses.
+    static let defaultRetryableStatusCodes: Set<Int> = [429, 500, 502, 503, 504]
 
+    /// A POST request with a JSON body.
+    static func jsonRequest(url: URL, body: [String: Any], headers: [String: String] = [:]) throws -> URLRequest {
+        guard JSONSerialization.isValidJSONObject(body),
+            let data = try? JSONSerialization.data(withJSONObject: body)
+        else {
+            throw LLMKitError.encodingError
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        for (field, value) in headers {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+        request.httpBody = data
+        return request
+    }
+
+    /// Decodes a response body, reporting failures as `LLMKitError.decodingError`.
+    static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            throw LLMKitError.decodingError(error.localizedDescription)
+        }
+    }
+
+    /// Sends the request and returns the body of a 2xx response.
     static func send(
         _ request: URLRequest,
         timeout: TimeInterval,
@@ -76,22 +108,6 @@ enum ReasoningChatHTTP {
         }
 
         throw lastError ?? LLMKitError.networkError("Request failed after \(maxRetries + 1) attempts")
-    }
-
-    static func jsonRequest(url: URL, body: [String: Any], headers: [String: String]) throws -> URLRequest {
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        for (field, value) in headers {
-            request.setValue(value, forHTTPHeaderField: field)
-        }
-        guard JSONSerialization.isValidJSONObject(body),
-            let data = try? JSONSerialization.data(withJSONObject: body)
-        else {
-            throw LLMKitError.encodingError
-        }
-        request.httpBody = data
-        return request
     }
 
     private static func makeSession(timeout: TimeInterval) -> URLSession {

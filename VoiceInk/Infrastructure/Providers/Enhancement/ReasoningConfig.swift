@@ -273,9 +273,23 @@ struct ReasoningConfig {
         return anthropicMediumDefaultEffortModels.contains(family) ? .medium : .high
     }
 
+    /// The request fields a picked Anthropic level sets.
+    struct AnthropicReasoning: Equatable {
+        var thinking: AnthropicThinking
+        var effort: String?
+        var maxTokens: Int
+
+        func apply(to request: inout AnthropicMessagesRequest) {
+            request.thinking = thinking
+            request.effort = effort
+            request.maxTokens = maxTokens
+        }
+    }
+
     /// The reasoning fields for a picked level, or `nil` for Default, which LLMkit sends
-    /// without any.
-    static func anthropicReasoning(for modelName: String, level: ReasoningLevel?) -> AnthropicReasoningRequest? {
+    /// without any. Thinking blocks are requested without text (`display: omitted`), since
+    /// VoiceInk never shows them.
+    static func anthropicReasoning(for modelName: String, level: ReasoningLevel?) -> AnthropicReasoning? {
         guard let level = effectiveLevel(level, for: .anthropic, modelName: modelName) else {
             return nil
         }
@@ -288,15 +302,15 @@ struct ReasoningConfig {
             case .medium: budget = 4096
             default: budget = 16_000
             }
-            return AnthropicReasoningRequest(
-                thinking: .budget(budget),
+            return AnthropicReasoning(
+                thinking: .enabled(budgetTokens: budget, display: .omitted),
                 effort: anthropicBudgetAndEffortModels.contains(family) ? level.effortValue : nil,
                 maxTokens: anthropicDefaultMaxTokens + budget
             )
         }
 
         if level == .off {
-            return AnthropicReasoningRequest(
+            return AnthropicReasoning(
                 thinking: anthropicBetweenToolsModels.contains(family) ? .betweenTools : .disabled,
                 effort: nil,
                 maxTokens: anthropicDefaultMaxTokens
@@ -305,7 +319,7 @@ struct ReasoningConfig {
 
         // xhigh and max think longer, and thinking counts toward `max_tokens`.
         let maxTokens = [.xhigh, .max].contains(level) ? 32_000 : anthropicDefaultMaxTokens
-        return AnthropicReasoningRequest(thinking: .adaptive, effort: level.effortValue, maxTokens: maxTokens)
+        return AnthropicReasoning(thinking: .adaptive(display: .omitted), effort: level.effortValue, maxTokens: maxTokens)
     }
 
     // MARK: - Mistral
@@ -375,14 +389,17 @@ struct ReasoningConfig {
 
     /// Levels the user may pick for this model, besides Default. Empty means the
     /// model only runs on Default, either because it has no reasoning control or
-    /// because LLMkit cannot send that provider's control yet.
+    /// because VoiceInk cannot send that provider's control yet.
     ///
     /// Adding reasoning for a provider (new providers start on Default only):
     /// 1. Return its levels here, from a `<provider>Levels(for:)` helper with the
     ///    provider's model sets above.
     /// 2. Map a level to request parameters: `getReasoningParameter` and
     ///    `getExtraBodyParameters` for OpenAI-compatible APIs, or a dedicated
-    ///    function like `geminiThinkingLevel(for:level:)` for native APIs.
+    ///    function like `geminiThinkingLevel(for:level:)` for native APIs. When
+    ///    LLMkit can't send the parameter or read the reply, send picked levels
+    ///    through a small in-app client (like `AnthropicMessagesClient`) and keep
+    ///    Default on LLMkit.
     /// 3. Pass the level through in `AIService.performChatCompletion`.
     /// 4. If Default sends a parameter today, describe it in `defaultLevel`.
     static func supportedLevels(
@@ -600,12 +617,6 @@ struct ReasoningConfig {
     }
 
     // MARK: - Ollama
-
-    /// Ollama's `think` value: a Bool, or a named level for models such as gpt-oss.
-    enum OllamaThink: Equatable {
-        case enabled(Bool)
-        case level(String)
-    }
 
     // Ollama returns 400 for `think: true` on models without the thinking capability. A
     // model whose `/api/show` lists named levels takes those instead of an on/off switch.

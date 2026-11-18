@@ -145,7 +145,7 @@ class OllamaService: ObservableObject {
         _ text: String,
         withSystemPrompt systemPrompt: String? = nil,
         model: String? = nil,
-        think: ReasoningConfig.OllamaThink = .enabled(false),
+        think: OllamaThink = .enabled(false),
         timeout: TimeInterval = 30,
         retryOnTimeout: Bool = false
     ) async throws -> String {
@@ -173,17 +173,20 @@ class OllamaService: ObservableObject {
                     timeout: timeout,
                     retryOnTimeout: retryOnTimeout
                 )
-            case .level(let level):
-                return try await OllamaThinkLevelClient.generate(
+            case .level:
+                // LLMkit only sends `think` as a Bool, so named levels use the in-app client.
+                return try await OllamaGenerateClient.generate(
                     baseURL: url,
-                    model: requestModel,
-                    prompt: text,
-                    systemPrompt: systemPrompt,
-                    temperature: defaultTemperature,
-                    thinkLevel: level,
+                    request: OllamaGenerateRequest(
+                        model: requestModel,
+                        prompt: text,
+                        system: systemPrompt,
+                        temperature: defaultTemperature,
+                        think: think
+                    ),
                     timeout: timeout,
                     retryOnTimeout: retryOnTimeout
-                )
+                ).response
             }
         } catch let error as LLMKitError {
             throw mapLLMKitError(error)
