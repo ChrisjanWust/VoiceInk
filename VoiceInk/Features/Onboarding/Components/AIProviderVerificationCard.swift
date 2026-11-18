@@ -14,6 +14,7 @@ struct AIProviderVerificationCard: View {
     @State private var verificationDetailMessage: String?
     @State private var verificationSucceeded = false
     @State private var isSwitchingProvider = false
+    @State private var bedrockVerificationModel = ""
 
     private var trimmedAPIKey: String {
         apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -34,6 +35,11 @@ struct AIProviderVerificationCard: View {
             if shouldShowAPIKeyEntry {
                 if selectedProvider == .bedrock {
                     BedrockRegionField(isDisabled: isVerifying)
+                    BedrockVerificationModelPicker(
+                        aiService: aiService,
+                        model: $bedrockVerificationModel,
+                        isDisabled: isVerifying
+                    )
                 }
                 apiKeyField
                 verificationFooter
@@ -43,7 +49,10 @@ struct AIProviderVerificationCard: View {
         }
         .padding(16)
         .background(AppMaterialCardBackground(cornerRadius: 10))
-        .onAppear { refreshVerificationState() }
+        .onAppear {
+            bedrockVerificationModel = aiService.selectedModel(for: .bedrock)
+            refreshVerificationState()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .aiProviderKeyChanged)) { _ in
             refreshVerificationState()
         }
@@ -268,7 +277,7 @@ struct AIProviderVerificationCard: View {
 
         Task {
             let provider = selectedProvider
-            let modelName = provider.defaultModel
+            let modelName = provider == .bedrock ? bedrockVerificationModel : provider.defaultModel
             let result = await aiService.verifyAPIKey(key, for: provider, model: modelName)
 
             await MainActor.run {

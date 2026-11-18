@@ -187,14 +187,29 @@ extension AIService {
         // Converse takes the system prompt as its own field, like Anthropic's Messages API.
         let systemMessages = messages.filter { $0.role == "system" }.map(\.content)
         let system = systemPrompt ?? (systemMessages.isEmpty ? nil : systemMessages.joined(separator: "\n"))
-        let bedrockMessages = messages.compactMap { message -> BedrockMessage? in
+        // Converse requires turns to alternate and start with the user. The Assistant can leave two user
+        // turns in a row after a failed reply, so merge same-role neighbours and drop a leading assistant turn.
+        var bedrockMessages: [BedrockMessage] = []
+        for message in messages {
+            let role: BedrockMessage.Role
             switch message.role {
             case "user":
-                return BedrockMessage(role: .user, text: message.content)
+                role = .user
             case "assistant":
-                return BedrockMessage(role: .assistant, text: message.content)
+                role = .assistant
             default:
-                return nil
+                continue
+            }
+            if bedrockMessages.isEmpty, role == .assistant {
+                continue
+            }
+            if let last = bedrockMessages.last, last.role == role {
+                bedrockMessages[bedrockMessages.count - 1] = BedrockMessage(
+                    role: role,
+                    text: last.text + "\n\n" + message.content
+                )
+            } else {
+                bedrockMessages.append(BedrockMessage(role: role, text: message.content))
             }
         }
 

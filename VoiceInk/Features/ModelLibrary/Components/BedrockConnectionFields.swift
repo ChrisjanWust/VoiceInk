@@ -69,3 +69,31 @@ struct BedrockRegionField: View {
         }
     }
 }
+
+/// Model used to verify a Bedrock key.
+///
+/// Bedrock keys inherit IAM permissions that can be limited to specific models, so verification runs against
+/// the model the person chooses here. The caller saves the choice as Bedrock's selected model once the key verifies.
+struct BedrockVerificationModelPicker: View {
+    @ObservedObject var aiService: AIService
+    @Binding var model: String
+    var isDisabled = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            EnhancementModelPicker(
+                title: "Model",
+                provider: .bedrock,
+                models: aiService.availableModels(for: .bedrock),
+                savedCustomModelID: aiService.customModelID(for: .bedrock),
+                draftModel: $model
+            )
+            .disabled(isDisabled)
+
+            Text("Verification sends a short request to this model, so choose one your API key is allowed to use.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
