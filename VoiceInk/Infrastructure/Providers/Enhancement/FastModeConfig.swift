@@ -1,10 +1,9 @@
 import Foundation
 
 /// What Fast mode adds to one enhancement request, independent of the client that sends it.
-/// A request path merges `bodyFields` into the top level of its JSON body and sets `headers`.
+/// A request path merges `bodyFields` into the top level of its JSON body.
 struct FastModeRequestParameters {
     var bodyFields: [String: Any]
-    var headers: [String: String] = [:]
 }
 
 /// Fast mode for enhancement requests: a provider's faster, higher-priced processing tier.
@@ -46,31 +45,6 @@ enum FastModeConfig {
         "gpt-5.2",
     ]
 
-    // MARK: - Gemini
-
-    /// Models that accept `service_tier: "priority"` (Priority inference) on the Interactions
-    /// API and answered faster with it in two sweeps on 2026-11-18 (16 interleaved runs per
-    /// model): median 7-69% lower, with the standard tier's long queue spikes gone for Gemini 4
-    /// Carbon and Argon. Left out: the other Flash models and Gemini 4 Hydrogen, which were no
-    /// faster or slower.
-    static let geminiPriorityModels: Set<String> = [
-        "gemini-4-carbon",
-        "gemini-4-argon",
-        "gemini-3.1-pro-preview",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
-    ]
-
-    // MARK: - Anthropic
-
-    /// Models that take `speed: "fast"` on the Messages API without a beta header, measured
-    /// live on 2026-11-18: Claude Opus 5.5 median 1.76 s to 0.83 s over 8 interleaved runs.
-    /// Sonnet 5.5 and Haiku 5.5 reject `speed`. Opus 5 needs the fast-mode beta header and a
-    /// waitlisted rate limit, and Opus 4.8 loses fast mode on 2026-11-30, so neither is listed.
-    static let anthropicFastModels: Set<String> = [
-        "claude-opus-5-5"
-    ]
-
     // MARK: - Amazon Bedrock
 
     /// Model IDs that take `performanceConfig: { latency: "optimized" }` on Converse, measured
@@ -86,9 +60,7 @@ enum FastModeConfig {
 
     /// Providers whose request path applies the parameters, so the toggle shows for them.
     ///
-    /// Not here yet: Gemini requests go through LLMkit's `GeminiLLMClient`, which can't add body
-    /// fields; Anthropic and Bedrock wait for their in-app clients to carry the fields. Add each
-    /// once its request path applies `parameters(...)`.
+    /// Not here yet: Bedrock waits for its request path to apply `parameters(...)`.
     static let appliedProviders: Set<AIProvider> = [.openAI]
 
     /// The provider's fast-tier fields for this model, or `nil` when the model has none.
@@ -101,10 +73,6 @@ enum FastModeConfig {
         switch provider {
         case .openAI where openAIPriorityModels.contains(modelName):
             return FastModeRequestParameters(bodyFields: ["service_tier": "priority"])
-        case .gemini where geminiPriorityModels.contains(modelName):
-            return FastModeRequestParameters(bodyFields: ["service_tier": "priority"])
-        case .anthropic where anthropicFastModels.contains(modelName):
-            return FastModeRequestParameters(bodyFields: ["speed": "fast"])
         case .bedrock where bedrockLatencyOptimizedModels.contains(modelName):
             return FastModeRequestParameters(bodyFields: ["performanceConfig": ["latency": "optimized"]])
         default:
@@ -131,10 +99,9 @@ enum FastModeConfig {
     }
 
     /// Merges the body fields into an LLMkit `extraBody`. Without parameters, `extraBody` is
-    /// returned unchanged. LLMkit can't set headers, so only header-free mappings go this way.
+    /// returned unchanged.
     static func merging(_ parameters: FastModeRequestParameters?, into extraBody: [String: Any]?) -> [String: Any]? {
         guard let parameters else { return extraBody }
-        assert(parameters.headers.isEmpty, "LLMkit's extraBody can't carry Fast mode headers")
         return (extraBody ?? [:]).merging(parameters.bodyFields) { _, fast in fast }
     }
 
@@ -143,10 +110,6 @@ enum FastModeConfig {
         switch provider {
         case .openAI:
             return String(localized: "Uses OpenAI priority processing, billed at a higher rate than standard.")
-        case .gemini:
-            return String(localized: "Uses Gemini priority inference, billed at 75–100% above the standard rate.")
-        case .anthropic:
-            return String(localized: "Uses Anthropic fast mode, billed at a higher rate than standard.")
         case .bedrock:
             return String(localized: "Uses Bedrock latency-optimized inference, billed at a higher rate.")
         default:
