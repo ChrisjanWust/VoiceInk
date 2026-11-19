@@ -1,10 +1,10 @@
 import Foundation
 
-/// Replaces SSNs and API keys, tokens, passwords and private keys in captured context
-/// (window OCR, clipboard) before any of it can reach an AI provider.
+/// Masks secrets and personal numbers in captured context (window OCR, clipboard) before it
+/// reaches an AI provider. Context only has to show what the user is talking about, so the rules
+/// go by shape and err toward masking: any long number or random-looking token is removed.
 enum ContextRedactor {
-    static let ssnPlaceholder = "[REDACTED SSN]"
-    static let secretPlaceholder = "[REDACTED SECRET]"
+    static let mask = "•••"
 
     static func redact(_ text: String) -> String {
         rules.reduce(text) { text, rule in
@@ -20,41 +20,34 @@ enum ContextRedactor {
         let regex: NSRegularExpression
         let template: String
 
-        init(_ pattern: String, _ template: String) {
+        /// Masks the whole match, or everything after capture group 1 when `keepsLabel` is set.
+        init(_ pattern: String, keepsLabel: Bool = false) {
             // The patterns are constants, so a bad one is a programming error.
             regex = try! NSRegularExpression(pattern: pattern)
-            self.template = template
+            template = keepsLabel ? "$1\(ContextRedactor.mask)" : ContextRedactor.mask
         }
     }
 
     private static let rules: [Rule] = [
-        // PEM private keys. Without an END line (cut off on screen), redact the base64 lines that follow.
+        // PEM private keys. Without an END line (cut off on screen), mask the base64 lines that follow.
         Rule(
-            #"-{2,}\s*BEGIN[A-Z ]*PRIVATE KEY\s*-{2,}(?:[\s\S]*?-{2,}\s*END[A-Z ]*PRIVATE KEY\s*-{2,}|(?:\s*[A-Za-z0-9+/=\\]{16,})*)"#,
-            secretPlaceholder
+            #"-{2,9}\s*BEGIN[A-Z ]*PRIVATE KEY\s*-{2,9}(?:[\s\S]*?-{2,9}\s*END[A-Z ]*PRIVATE KEY\s*-{2,9}|(?:\s*[A-Za-z0-9+/=\\]{16,})*)"#
         ),
-        // Password in a connection URL: scheme://user:password@host, or scheme://:password@host
-        Rule(#"\b([A-Za-z][A-Za-z0-9+.-]*://[^\s:/@]*:)[^\s@/]+@"#, "$1\(secretPlaceholder)@"),
-        // Keys recognizable by their prefix alone.
+        // Database URLs, and any URL with a password in it.
         Rule(
-            #"\b(?:sk-[A-Za-z0-9_-]{20,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|glpat-[A-Za-z0-9_-]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}|(?:AKIA|ASIA)[A-Z0-9]{16}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{30,}|xai-[A-Za-z0-9]{20,}|pplx-[A-Za-z0-9]{20,}|r8_[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{30,}|ops_eyJ[A-Za-z0-9_-]{20,}|sntry[su]_[A-Za-z0-9_=+/-]{20,}|apify_api_[A-Za-z0-9]{20,}|tgp_v1_[A-Za-z0-9_-]{20,}|SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"#,
-            secretPlaceholder
+            #"(?i)\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|mssql|sqlserver|jdbc:[a-z]+)://|[a-z][a-z0-9+.-]{0,20}://[^\s/@]*:[^\s/@]*@)[^\s"'<>]*"#
         ),
-        Rule(#"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/-]{16,}=*"#, "$1\(secretPlaceholder)"),
-        // Values assigned to a secret-sounding name, as in .env files, config and JSON:
-        // OPENAI_API_KEY=…, "clientSecret": "…", API Key: …, password: …
-        // The value must mix letters and digits, which keeps code like `token = getToken()`
-        // and numeric ids like `primary_key = 12345678` intact.
+        // .env lines: every value, whatever the variable is called.
+        Rule(#"(?m)^([ \t]*(?:export[ \t]+)?[A-Z][A-Z0-9_]*[ \t]*=[ \t]*)\S.*"#, keepsLabel: true),
+        // The value after a secret-sounding name: password: …, "apiKey": "…", API Key: …, token = …
         Rule(
-            #"(?i)(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]{0,64}(?:(?:api|access|secret|private)[ _.-]?key|[_-]key|secret|token|passw(?:or)?d|pwd|credentials?)(?:[_.-][A-Za-z0-9]+)*["']?\s*[:=]\s*["']?)(?!\[REDACTED)(?=[^\s"'`,;]*\d)(?=[^\s"'`,;]*[A-Za-z])[^\s"'`,;]{8,}"#,
-            "$1\(secretPlaceholder)"
+            #"(?i)((?:passw(?:or)?d|pwd|secret|token|credentials?|(?:api|access|private|secret)[ _-]?key)(?:[_-][A-Za-z0-9]+)?["']?[ \t]*[:=](?!=)[ \t]*["']?)[^\s"',;]+"#,
+            keepsLabel: true
         ),
-        // SSNs after a label, with any or no separators: SSN: 123456789, "ssn": "123456789", CUSTOMER_SSN=…
-        Rule(
-            #"(?i)((?<![A-Za-z0-9])(?:SSN|social security(?:\s+(?:number|no\.?))?)["']?\s*[:#=]?\s*["']?)\d{3}[- ]?\d{2}[- ]?\d{4}(?!\d)"#,
-            "$1\(ssnPlaceholder)"
-        ),
-        // Dashed SSNs anywhere, skipping numbers the SSA never issues.
-        Rule(#"(?<![\w-])(?!000|666|9)\d{3}-(?!00)\d{2}-(?!0000)\d{4}(?![\w-])"#, ssnPlaceholder),
+        // API keys, tokens and hashes: 20+ characters that mix letters and digits.
+        Rule(#"(?<![A-Za-z0-9_+-])(?=[A-Za-z0-9_+-]*[0-9])(?=[A-Za-z0-9_+-]*[A-Za-z])[A-Za-z0-9_+-]{20,}(?![A-Za-z0-9_+-])"#),
+        // SSNs (123-45-6789, 123 45 6789), card numbers (1234 5678 9012 3456), and any run of
+        // 9+ digits: SSNs and card numbers without separators, account numbers.
+        Rule(#"(?<!\d)(?:\d{3}([- ])\d{2}\1\d{4}|\d{4}([- ])\d{4}\2\d{4}\2\d{4}|\d{9,})(?!\d)"#),
     ]
 }
