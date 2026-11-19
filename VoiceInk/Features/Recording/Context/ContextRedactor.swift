@@ -2,7 +2,7 @@ import Foundation
 
 /// Masks secrets and personal numbers in captured context (window OCR, clipboard) before it
 /// reaches an AI provider. Context only has to show what the user is talking about, so the rules
-/// go by shape and err toward masking: any long number or random-looking token is removed.
+/// go by shape: long numbers and random-looking tokens go, words, names and paths stay.
 enum ContextRedactor {
     static let mask = "•••"
 
@@ -37,17 +37,21 @@ enum ContextRedactor {
         Rule(
             #"(?i)\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|mssql|sqlserver|jdbc:[a-z]+)://|[a-z][a-z0-9+.-]{0,20}://[^\s/@]*:[^\s/@]*@)[^\s"'<>]*"#
         ),
-        // .env lines: every value, whatever the variable is called.
-        Rule(#"(?m)^([ \t]*(?:export[ \t]+)?[A-Z][A-Z0-9_]*[ \t]*=[ \t]*)\S.*"#, keepsLabel: true),
-        // The value after a secret-sounding name: password: …, "apiKey": "…", API Key: …, token = …
+        // A value with a digit after a secret-sounding name: DB_PASS=…, "apiKey": "…", API Key: …
+        // The digit keeps code like `token = getToken()` intact.
         Rule(
-            #"(?i)((?:passw(?:or)?d|pwd|secret|token|credentials?|(?:api|access|private|secret)[ _-]?key)(?:[_-][A-Za-z0-9]+)?["']?[ \t]*[:=](?!=)[ \t]*["']?)[^\s"',;]+"#,
+            #"(?i)((?:passw(?:or)?d|passphrase|pwd|[_-]pass|[_-]pw|secret|token|credentials?|(?:api|access|private|secret)[ _-]?key)(?:[_-][A-Za-z0-9]+)?["']?[ \t]*[:=](?!=)[ \t]*["']?)(?=[^\s"',;]*\d)[^\s"',;]+"#,
             keepsLabel: true
         ),
-        // API keys, tokens and hashes: 20+ characters that mix letters and digits.
-        Rule(#"(?<![A-Za-z0-9_+-])(?=[A-Za-z0-9_+-]*[0-9])(?=[A-Za-z0-9_+-]*[A-Za-z])[A-Za-z0-9_+-]{20,}(?![A-Za-z0-9_+-])"#),
+        // API keys, tokens and hashes: 20+ characters in which letters and digits switch places 3+
+        // times. Random strings shuffle them; names keep digits in one or two spots
+        // (claude-haiku-4-5-20251001, ISO8601DateFormatter). Anything touching a / is a path.
+        Rule(
+            #"(?<![A-Za-z0-9_+/-])(?=(?:[A-Za-z0-9_+-]*?(?:[A-Za-z](?=[0-9])|[0-9](?=[A-Za-z]))){3})[A-Za-z0-9_+-]{20,}(?![A-Za-z0-9_+/-])"#
+        ),
         // SSNs (123-45-6789, 123 45 6789), card numbers (1234 5678 9012 3456), and any run of
-        // 9+ digits: SSNs and card numbers without separators, account numbers.
-        Rule(#"(?<!\d)(?:\d{3}([- ])\d{2}\1\d{4}|\d{4}([- ])\d{4}\2\d{4}\2\d{4}|\d{9,})(?!\d)"#),
+        // 9+ digits standing on their own: SSNs and card numbers without separators, account numbers.
+        // Digits glued to letters or a / are part of a name, URL or path.
+        Rule(#"(?<![A-Za-z0-9_/])(?:\d{3}([- ])\d{2}\1\d{4}|\d{4}([- ])\d{4}\2\d{4}\2\d{4}|\d{9,})(?![A-Za-z0-9_/])"#),
     ]
 }
