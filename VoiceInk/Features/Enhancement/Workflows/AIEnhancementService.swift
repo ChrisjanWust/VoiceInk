@@ -118,12 +118,15 @@ class AIEnhancementService: ObservableObject {
         lastCapturedClipboard = contextSnapshot?.clipboardText
         screenCaptureService.lastCapturedText = contextSnapshot?.screenText
 
+        // Every context block is redacted here, the only place context enters a prompt
+        // (and the saved request history). Disabled contexts are never scanned.
         let selectedTextContext: String
         if useSelectedText,
             let selectedText = contextSnapshot?.selectedText,
             !selectedText.isEmpty
         {
-            selectedTextContext = "<CURRENTLY_SELECTED_TEXT>\n\(selectedText)\n</CURRENTLY_SELECTED_TEXT>"
+            selectedTextContext =
+                "<CURRENTLY_SELECTED_TEXT>\n\(ContextRedactor.redact(selectedText))\n</CURRENTLY_SELECTED_TEXT>"
         } else {
             selectedTextContext = ""
         }
@@ -133,7 +136,7 @@ class AIEnhancementService: ObservableObject {
                 let clipboardText = lastCapturedClipboard,
                 !clipboardText.isEmpty
             {
-                "<CLIPBOARD_CONTEXT>\n\(clipboardText)\n</CLIPBOARD_CONTEXT>"
+                "<CLIPBOARD_CONTEXT>\n\(ContextRedactor.redact(clipboardText))\n</CLIPBOARD_CONTEXT>"
             } else {
                 ""
             }
@@ -143,7 +146,7 @@ class AIEnhancementService: ObservableObject {
                 let capturedText = screenCaptureService.lastCapturedText,
                 !capturedText.isEmpty
             {
-                "<CURRENT_WINDOW_CONTEXT>\n\(capturedText)\n</CURRENT_WINDOW_CONTEXT>"
+                "<CURRENT_WINDOW_CONTEXT>\n\(ContextRedactor.redact(capturedText))\n</CURRENT_WINDOW_CONTEXT>"
             } else {
                 ""
             }
