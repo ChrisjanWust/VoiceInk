@@ -35,23 +35,24 @@ enum ContextRedactor {
         ),
         // Database URLs, and any URL with a password in it.
         Rule(
-            #"(?i)\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|mssql|sqlserver|jdbc:[a-z]+)://|[a-z][a-z0-9+.-]{0,20}://[^\s/@]*:[^\s/@]*@)[^\s"'<>]*"#
+            #"(?i)\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|mssql|sqlserver|jdbc:[a-z]+)://|[a-z][a-z0-9+.-]{0,20}://[^\s:/@"'<>]*:[^\s/@"'<>&]*@)[^\s"'<>]*"#
         ),
         // A value with a digit after a secret-sounding name: DB_PASS=…, "apiKey": "…", API Key: …
-        // The digit keeps code like `token = getToken()` intact.
+        // Paths and code stay: values starting like a path, calls like `token = uuid4()`, and
+        // anything without a digit, like `token = getToken()`.
         Rule(
-            #"(?i)((?:passw(?:or)?d|passphrase|pwd|[_-]pass|[_-]pw|secret|token|credentials?|(?:api|access|private|secret)[ _-]?key)(?:[_-][A-Za-z0-9]+)?["']?[ \t]*[:=](?!=)[ \t]*["']?)(?=[^\s"',;]*\d)[^\s"',;]+"#,
+            #"(?i)((?:passw(?:or)?d|passphrase|pwd|[_-]pass|[_-]pw|secret|token|credentials?|(?:(?:api|access|private|secret)[ _-]?|[_-])key)(?:[_-][A-Za-z0-9]+)*["']?[ \t]*[:=](?!=)[ \t]*["']?)(?![~.]{0,2}/)(?![^\s"',;]*\()(?=[^\s"',;]*\d)[^\s"',;]+"#,
             keepsLabel: true
         ),
         // API keys, tokens and hashes: 20+ characters in which letters and digits switch places 3+
         // times. Random strings shuffle them; names keep digits in one or two spots
-        // (claude-haiku-4-5-20251001, ISO8601DateFormatter). Anything touching a / is a path.
+        // (claude-haiku-4-5-20251001, ISO8601DateFormatter). Anything in a word with a / is a path.
         Rule(
-            #"(?<![A-Za-z0-9_+/-])(?=(?:[A-Za-z0-9_+-]*?(?:[A-Za-z](?=[0-9])|[0-9](?=[A-Za-z]))){3})[A-Za-z0-9_+-]{20,}(?![A-Za-z0-9_+/-])"#
+            #"(?<![A-Za-z0-9_+/-])(?=(?:[A-Za-z0-9_+-]*?(?:[A-Za-z](?=[0-9])|[0-9](?=[A-Za-z]))){3})[A-Za-z0-9_+-]{20,}(?![A-Za-z0-9_+/-])(?<!/\S{0,200})"#
         ),
         // SSNs (123-45-6789, 123 45 6789), card numbers (1234 5678 9012 3456), and any run of
         // 9+ digits standing on their own: SSNs and card numbers without separators, account numbers.
-        // Digits glued to letters or a / are part of a name, URL or path.
-        Rule(#"(?<![A-Za-z0-9_/])(?:\d{3}([- ])\d{2}\1\d{4}|\d{4}([- ])\d{4}\2\d{4}\2\d{4}|\d{9,})(?![A-Za-z0-9_/])"#),
+        // Digits glued to letters, or in a word with a /, are part of a name, URL or path.
+        Rule(#"(?<![A-Za-z0-9_/])(?:\d{3}([- ])\d{2}\1\d{4}|\d{4}([- ])\d{4}\2\d{4}\2\d{4}|\d{9,})(?![A-Za-z0-9_/])(?<!/\S{0,200})"#),
     ]
 }
